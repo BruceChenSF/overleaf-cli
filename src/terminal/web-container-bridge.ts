@@ -15,8 +15,15 @@ export class WebContainerBridge {
     try {
       this.wc = await WebContainer.boot();
 
-      // Fetch project files from Overleaf
-      const files = await this.fetchProjectFiles();
+      // TODO: Fetch project files from Overleaf (API integration disabled for now)
+      // const files = await this.fetchProjectFiles();
+
+      // Create empty project structure
+      const files = {
+        'README.md': {
+          file: { contents: '# Overleaf Project\n\nProject files will be synced here once API integration is complete.' }
+        }
+      };
 
       // Mount files to workspace
       await this.wc.mount(files);

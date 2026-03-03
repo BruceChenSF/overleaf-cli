@@ -1,6 +1,7 @@
 import { Terminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 import { WebContainerBridge } from './web-container-bridge';
+import 'xterm/css/xterm.css';
 
 const terminal = new Terminal({
   cursorBlink: true,
