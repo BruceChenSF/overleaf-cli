@@ -31,13 +31,8 @@ async function handleMessage(message: ExtensionMessage): Promise<any> {
 async function openTerminal(message: OpenTerminalMessage): Promise<{ windowId: number }> {
   console.log('[Service Worker] OPEN_TERMINAL request received:', message);
 
-  try {
-    await overleafAPI['getSessionCookie']();
-    console.log('[Service Worker] Session validated successfully');
-  } catch (err) {
-    console.error('[Service Worker] Session validation failed:', err);
-    throw new Error('Please login to Overleaf first');
-  }
+  // Skip API validation for now and just open terminal
+  console.log('[Service Worker] Opening terminal (API integration disabled for now)');
 
   if (terminalWindowId !== null) {
     try {
@@ -64,11 +59,7 @@ async function openTerminal(message: OpenTerminalMessage): Promise<{ windowId: n
     }
   });
 
-  // Initialize sync manager
-  const docs = await overleafAPI.getAllDocs(message.projectId);
-  const syncManager = new SyncManager(message.projectId);
-  await syncManager.init(docs);
-  syncManagers.set(message.projectId, syncManager);
+  console.log('[Service Worker] Terminal window created:', window.id);
 
   return { windowId: window.id ?? 0 };
 }
