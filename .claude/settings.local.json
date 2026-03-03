@@ -18,7 +18,8 @@
       "Bash(git branch:*)",
       "Bash(cat:*)",
       "WebSearch",
-      "Bash(node:*)"
+      "Bash(node:*)",
+      "Skill(superpowers:systematic-debugging)"
     ]
   },
   "enabledPlugins": {
