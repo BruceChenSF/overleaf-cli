@@ -35,6 +35,12 @@
     "48": "public/icons/icon48.png",
     "128": "public/icons/icon128.png"
   },
+  "cross_origin_embedder_policy": {
+    "value": "require-corp"
+  },
+  "cross_origin_opener_policy": {
+    "value": "same-origin"
+  },
   "web_accessible_resources": [
     {
       "matches": ["https://*.overleaf.com/*"],

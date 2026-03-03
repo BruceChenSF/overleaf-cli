@@ -16,7 +16,8 @@
       "Bash(npm test)",
       "Bash(git worktree:*)",
       "Bash(git branch:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "WebSearch"
     ]
   },
   "enabledPlugins": {

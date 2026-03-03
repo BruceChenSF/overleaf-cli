@@ -13,6 +13,22 @@ export class WebContainerBridge {
 
   async init(): Promise<void> {
     try {
+      // Check cross-origin isolation
+      console.log('[WebContainer] Checking cross-origin isolation...');
+      console.log('[WebContainer] crossOriginIsolated:', crossOriginIsolated);
+      console.log('[WebContainer] SharedArrayBuffer:', typeof SharedArrayBuffer);
+
+      if (!crossOriginIsolated) {
+        this.terminal.writeln('\x1b[33mWarning: Cross-origin isolation not enabled\x1b[0m');
+        this.terminal.writeln('WebContainer requires cross-origin isolation to work.');
+        this.terminal.writeln('');
+        this.terminal.writeln('Required headers:');
+        this.terminal.writeln('  Cross-Origin-Opener-Policy: same-origin');
+        this.terminal.writeln('  Cross-Origin-Embedder-Policy: require-corp');
+        this.terminal.writeln('');
+        throw new Error('Cross-origin isolation not enabled. SharedArrayBuffer is not available.');
+      }
+
       console.log('[WebContainer] Starting boot...');
       this.terminal.writeln('[1/4] Booting WebContainer...');
 
