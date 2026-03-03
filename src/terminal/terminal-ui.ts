@@ -56,17 +56,6 @@ async function init(): Promise<void> {
   terminal.writeln('Project ID: ' + projectContext.projectId);
   terminal.writeln('');
 
-  // Get session cookie
-  const sessionCookie = await getSessionCookie();
-
-  if (!sessionCookie) {
-    terminal.writeln('\x1b[31mError: Could not find Overleaf session cookie\x1b[0m');
-    terminal.writeln('Please make sure you are logged in to Overleaf.');
-    return;
-  }
-
-  // Use domain and csrfToken from context
-  const domain = projectContext.domain || 'overleaf.com';
   const csrfToken = projectContext.csrfToken;
 
   if (!csrfToken) {
@@ -80,7 +69,7 @@ async function init(): Promise<void> {
   wsClient = new WebSocketClient(terminal);
 
   try {
-    await wsClient.connect(projectContext.projectId, sessionCookie, domain, csrfToken);
+    await wsClient.connect(projectContext.projectId, csrfToken);
     terminal.writeln('\x1b[32mConnected!\x1b[0m');
     terminal.writeln('Files are being synchronized from Overleaf...');
     terminal.writeln('');
@@ -160,20 +149,6 @@ async function handleCommand(command: string): Promise<void> {
       terminal.writeln(`Command not found: ${cmd}`);
       terminal.writeln('Type "help" for available commands.');
   }
-}
-
-async function getSessionCookie(): Promise<string | null> {
-  const cookies = await chrome.cookies.getAll({});
-
-  const sessionCookie = cookies.find(
-    c => c.name === 'overleaf_session_id' ||
-         c.name === 'connect.sid' ||
-         c.name === 'koa.sid' ||
-         c.name.includes('session') ||
-         c.name.includes('sid')
-  );
-
-  return sessionCookie?.value || null;
 }
 
 init().catch(err => {

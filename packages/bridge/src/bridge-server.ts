@@ -1,6 +1,5 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { spawn, ChildProcess } from 'child_process';
-import { OverleafClient } from './overleaf-client.js';
 import { SyncManagerDOM } from './sync-manager-dom.js';
 import { promises as fs } from 'fs';
 import path from 'path';
@@ -8,7 +7,7 @@ import type { BridgeMessage, AuthMessage, CommandMessage } from './types.js';
 
 export class BridgeServer {
   private wss: WebSocketServer;
-  private clients: Map<WebSocket, { projectId: string; overleafClient: OverleafClient; syncManager: SyncManagerDOM }> = new Map();
+  private clients: Map<WebSocket, { projectId: string; syncManager: SyncManagerDOM }> = new Map();
   private claudeProcess?: ChildProcess;
   private workDir: string;
 
@@ -22,11 +21,9 @@ export class BridgeServer {
       ws.on('message', async (data: Buffer) => {
         try {
           const message = JSON.parse(data.toString()) as BridgeMessage;
-          console.log('[Bridge] Received message type:', message.type);
           await this.handleMessage(ws, message);
         } catch (error) {
           console.error('[Bridge] Error handling message:', error);
-          console.error('[Bridge] Message data:', data.toString());
           ws.send(JSON.stringify({
             type: 'response',
             data: { success: false, error: 'Invalid message' }
@@ -52,8 +49,7 @@ export class BridgeServer {
         await this.handleCommand(ws, message as CommandMessage);
         break;
       case 'EXTENSION_MESSAGE':
-        // Response from extension - forward to sync manager if needed
-        console.log('[Bridge] Received extension message response');
+        // Response from extension - handled by SyncManagerDOM
         break;
       default:
         ws.send(JSON.stringify({
@@ -64,23 +60,18 @@ export class BridgeServer {
   }
 
   private async handleAuth(ws: WebSocket, message: AuthMessage): Promise<void> {
-    const { projectId, sessionCookie, domain, csrfToken } = message.data;
+    const { projectId, csrfToken } = message.data;
 
     console.log(`[Bridge] Auth request for project ${projectId}`);
 
     if (!csrfToken) {
-      console.error('[Bridge] Missing CSRF token in auth message');
+      console.error('[Bridge] Missing CSRF token');
       ws.send(JSON.stringify({
         type: 'response',
         data: { success: false, error: 'Missing CSRF token. Please refresh the Overleaf page and try again.' }
       }));
       return;
     }
-
-    console.log(`[Bridge] CSRF token (first 10 chars): ${csrfToken.substring(0, 10)}...`);
-
-    // Create Overleaf client (kept for potential future use)
-    const overleafClient = new OverleafClient(sessionCookie, csrfToken, domain);
 
     // Create project workspace
     const projectDir = path.join(this.workDir, projectId);
@@ -90,7 +81,6 @@ export class BridgeServer {
     const syncManager = new SyncManagerDOM(projectId, projectDir, ws);
 
     // Initial sync
-    console.log('[Bridge] Starting initial sync...');
     try {
       await syncManager.initialSync();
       syncManager.startWatching();
@@ -100,7 +90,7 @@ export class BridgeServer {
     }
 
     // Store client
-    this.clients.set(ws, { projectId, overleafClient, syncManager });
+    this.clients.set(ws, { projectId, syncManager });
 
     // Send success response
     ws.send(JSON.stringify({

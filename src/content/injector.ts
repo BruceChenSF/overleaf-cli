@@ -10,10 +10,6 @@ function extractCSRFToken(): string | null {
   return metaTag?.content || null;
 }
 
-function extractDomain(): 'overleaf.com' | 'cn.overleaf.com' {
-  return window.location.hostname === 'cn.overleaf.com' ? 'cn.overleaf.com' : 'overleaf.com';
-}
-
 function createTerminalButton(): HTMLElement {
   // Create a div wrapper similar to the File dropdown structure
   const wrapper = document.createElement('div');
@@ -37,7 +33,6 @@ function createTerminalButton(): HTMLElement {
 async function openTerminal(): Promise<void> {
   const projectId = extractProjectId();
   const csrfToken = extractCSRFToken();
-  const domain = extractDomain();
 
   if (!projectId) {
     alert('Could not identify Overleaf project. Please refresh the page.');
@@ -54,12 +49,10 @@ async function openTerminal(): Promise<void> {
     type: 'OPEN_TERMINAL',
     projectId,
     projectUrl: window.location.href,
-    csrfToken,
-    domain
+    csrfToken
   };
 
   console.log('[Overleaf CC] Sending OPEN_TERMINAL message:', message);
-  console.log('[Overleaf CC] CSRF Token (first 10 chars):', csrfToken.substring(0, 10) + '...');
 
   try {
     const response = await chrome.runtime.sendMessage(message);
@@ -79,8 +72,6 @@ async function openTerminal(): Promise<void> {
 
 function injectButton(): void {
   console.log('[Overleaf CC] Attempting to inject button...');
-  console.log('[Overleaf CC] Current URL:', window.location.href);
-  console.log('[Overleaf CC] Project ID:', extractProjectId());
 
   // Find the menu bar using the exact selector
   const menuBar = document.querySelector('#ide-root > div.ide-redesign-main > nav > div.ide-redesign-toolbar-menu > div.ide-redesign-toolbar-menu-bar');
@@ -131,17 +122,13 @@ function injectIntoMenuBar(menuBar: Element): void {
 
 function init(): void {
   console.log('[Overleaf CC] Content script loaded');
-  console.log('[Overleaf CC] Page ready state:', document.readyState);
 
   // Wait for page to load
   if (document.readyState === 'loading') {
-    console.log('[Overleaf CC] Waiting for DOMContentLoaded...');
     document.addEventListener('DOMContentLoaded', () => {
-      console.log('[Overleaf CC] DOMContentLoaded fired');
       setTimeout(injectButton, 1000);
     });
   } else {
-    console.log('[Overleaf CC] Page already loaded, scheduling injection...');
     setTimeout(injectButton, 1000);
   }
 

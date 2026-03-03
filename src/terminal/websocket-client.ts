@@ -1,7 +1,7 @@
 import type { Terminal } from 'xterm';
 
 export interface BridgeMessage {
-  type: 'auth' | 'command' | 'response' | 'sync' | 'EXTENSION_MESSAGE';
+  type: 'auth' | 'command' | 'response' | 'EXTENSION_MESSAGE';
   data: unknown;
   messageId?: string;
 }
@@ -11,12 +11,17 @@ export class WebSocketClient {
   private terminal: Terminal;
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
+  private projectId?: string;
+  private csrfToken?: string;
 
   constructor(terminal: Terminal) {
     this.terminal = terminal;
   }
 
-  async connect(projectId: string, sessionCookie: string, domain: string, csrfToken: string): Promise<void> {
+  async connect(projectId: string, csrfToken: string): Promise<void> {
+    this.projectId = projectId;
+    this.csrfToken = csrfToken;
+
     return new Promise((resolve, reject) => {
       this.ws = new WebSocket('ws://localhost:3456');
 
@@ -26,7 +31,7 @@ export class WebSocketClient {
         // Send auth message with CSRF token
         this.send({
           type: 'auth',
-          data: { projectId, sessionCookie, domain, csrfToken }
+          data: { projectId, csrfToken }
         });
 
         resolve();
@@ -57,7 +62,7 @@ export class WebSocketClient {
 
       this.ws.onclose = () => {
         console.log('[WebSocket] Disconnected from bridge server');
-        this.handleReconnect(projectId, sessionCookie, domain);
+        this.handleReconnect();
       };
 
       this.ws.onerror = (error) => {
@@ -67,13 +72,13 @@ export class WebSocketClient {
     });
   }
 
-  private handleReconnect(projectId: string, sessionCookie: string, domain: string, csrfToken: string): void {
-    if (this.reconnectAttempts < this.maxReconnectAttempts) {
+  private handleReconnect(): void {
+    if (this.reconnectAttempts < this.maxReconnectAttempts && this.projectId && this.csrfToken) {
       this.reconnectAttempts++;
       console.log(`[WebSocket] Reconnecting... (${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
 
       setTimeout(() => {
-        this.connect(projectId, sessionCookie, domain, csrfToken);
+        this.connect(this.projectId, this.csrfToken);
       }, 2000 * this.reconnectAttempts);
     } else {
       this.terminal.writeln('\r\n\x1b[31mConnection lost. Please restart the bridge server.\x1b[0m');
