@@ -2,6 +2,9 @@
 REM Overleaf CC - Quick Verification Script for Windows
 REM Double-click this file to run
 
+REM 设置控制台代码页为 UTF-8 以支持中文
+chcp 65001 >nul 2>&1
+
 echo ==================================
 echo Overleaf CC - Pre-Test Verification
 echo ==================================

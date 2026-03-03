@@ -1,6 +1,18 @@
 # Overleaf CC - Pre-Test Verification Script for Windows
 # Run: .\test-quick-verify.ps1
 
+# 设置控制台编码为 UTF-8
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
+
+# 尝试设置控制台代码页为 UTF-8 (Windows 10+)
+try {
+    [Console]::OutputEncoding = [System.Text.Encoding]::GetEncoding(65001)
+    chcp 65001 | Out-Null
+} catch {
+    # 如果失败，忽略（旧版本 Windows）
+}
+
 $ErrorActionPreference = "Stop"
 
 Write-Host "==================================" -ForegroundColor Cyan
