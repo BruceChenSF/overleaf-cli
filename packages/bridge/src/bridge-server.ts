@@ -103,7 +103,7 @@ export class BridgeServer {
     console.log(`[Bridge] Executing: ${command} ${args.join(' ')}`);
 
     return new Promise((resolve) => {
-      const process = spawn(command, args, {
+      const childProcess = spawn(command, args, {
         cwd: projectDir,
         shell: true,
         env: { ...process.env }
@@ -112,7 +112,7 @@ export class BridgeServer {
       let output = '';
       let errorOutput = '';
 
-      process.stdout?.on('data', (data) => {
+      childProcess.stdout?.on('data', (data: Buffer) => {
         const text = data.toString();
         output += text;
         ws.send(JSON.stringify({
@@ -121,7 +121,7 @@ export class BridgeServer {
         }));
       });
 
-      process.stderr?.on('data', (data) => {
+      childProcess.stderr?.on('data', (data: Buffer) => {
         const text = data.toString();
         errorOutput += text;
         ws.send(JSON.stringify({
@@ -130,7 +130,7 @@ export class BridgeServer {
         }));
       });
 
-      process.on('close', (code) => {
+      childProcess.on('close', (code: number | null) => {
         console.log(`[Bridge] Command exited with code ${code}`);
         resolve();
       });
