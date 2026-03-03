@@ -6,30 +6,23 @@ function extractProjectId(): string | null {
 }
 
 function createTerminalButton(): HTMLElement {
+  // Create a div wrapper similar to the File dropdown structure
+  const wrapper = document.createElement('div');
+  wrapper.className = 'toolbar-menu-bar-item';
+  wrapper.id = 'overleaf-cc-terminal-btn';
+
+  // Create the button
   const button = document.createElement('button');
-  button.id = 'overleaf-cc-terminal-btn';
-  button.className = 'btn-btn-default';
-  button.innerHTML = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-      <path d="M0 3v10h16V3H0zm15 9H1V4h14v8zM3 6l3 2-3 2V6zm4 4h5v1H7v-1z"/>
-    </svg>
-    <span>Terminal</span>
-  `;
-  button.style.cssText = `
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 12px;
-    cursor: pointer;
-    border: 1px solid #ccc;
-    border-radius: 4px;
-    background: white;
-    font-size: 14px;
-  `;
+  button.type = 'button';
+  button.id = 'toolbar-menu-bar-item-terminal';
+  button.className = 'ide-redesign-toolbar-dropdown-toggle-subdued ide-redesign-toolbar-button-subdued menu-bar-toggle btn btn-secondary';
+  button.setAttribute('aria-expanded', 'false');
+  button.innerHTML = 'Terminal';
 
   button.addEventListener('click', openTerminal);
 
-  return button;
+  wrapper.appendChild(button);
+  return wrapper;
 }
 
 async function openTerminal(): Promise<void> {
@@ -62,54 +55,50 @@ function injectButton(): void {
   console.log('[Overleaf CC] Current URL:', window.location.href);
   console.log('[Overleaf CC] Project ID:', extractProjectId());
 
-  // Find the toolbar nav (fixed selector)
-  const toolbar = document.querySelector('nav.ide-redesign-toolbar');
+  // Find the menu bar using the exact selector
+  const menuBar = document.querySelector('#ide-root > div.ide-redesign-main > nav > div.ide-redesign-toolbar-menu > div.ide-redesign-toolbar-menu-bar');
 
-  if (!toolbar) {
-    console.log('[Overleaf CC] Toolbar not found (nav.ide-redesign-toolbar)');
-    console.log('[Overleaf CC] Available toolbars:', document.querySelectorAll('[class*="toolbar"]'));
-
-    // Try alternative selectors
-    const altToolbar = document.querySelector('nav');
-    const allNavs = document.querySelectorAll('nav');
-
-    console.log('[Overleaf CC] Found <nav> elements:', allNavs.length);
-
-    if (allNavs.length > 0) {
-      allNavs.forEach((nav, i) => {
-        console.log(`[Overleaf CC] Nav ${i}:`, nav.className, nav.id);
-      });
+  if (!menuBar) {
+    console.log('[Overleaf CC] Menu bar not found, trying alternative selector...');
+    // Try alternative approach
+    const altMenuBar = document.querySelector('.ide-redesign-toolbar-menu-bar');
+    if (!altMenuBar) {
+      console.log('[Overleaf CC] Still cannot find menu bar');
+      return;
     }
-
+    console.log('[Overleaf CC] Using alternative menu bar selector');
+    injectIntoMenuBar(altMenuBar);
     return;
   }
 
-  console.log('[Overleaf CC] Toolbar found!', toolbar);
+  console.log('[Overleaf CC] Menu bar found!', menuBar);
+  injectIntoMenuBar(menuBar);
+}
 
+function injectIntoMenuBar(menuBar: Element): void {
   // Check if button already exists
   if (document.getElementById('overleaf-cc-terminal-btn')) {
     console.log('[Overleaf CC] Button already exists');
     return;
   }
 
-  // Find the actions container to insert button in the right place
-  const actionsContainer = toolbar.querySelector('.ide-redesign-toolbar-actions');
-  if (actionsContainer) {
-    const button = createTerminalButton();
-    // Insert before the button container
-    const buttonContainer = actionsContainer.querySelector('.ide-redesign-toolbar-button-container');
-    if (buttonContainer) {
-      buttonContainer.insertBefore(button, buttonContainer.firstChild);
-      console.log('[Overleaf CC] ✓ Terminal button injected into actions container!');
-    } else {
-      actionsContainer.appendChild(button);
-      console.log('[Overleaf CC] ✓ Terminal button injected into actions!');
-    }
+  // Find the File button to use as reference
+  const fileButton = menuBar.querySelector('#toolbar-menu-bar-item-file');
+
+  // Create the terminal button
+  const terminalButton = createTerminalButton();
+
+  if (fileButton && fileButton.parentElement) {
+    // Insert after the File button
+    fileButton.parentElement.parentNode?.insertBefore(
+      terminalButton,
+      fileButton.parentElement.nextSibling
+    );
+    console.log('[Overleaf CC] ✓ Terminal button injected after File button!');
   } else {
-    // Fallback: append to toolbar
-    const button = createTerminalButton();
-    toolbar.appendChild(button);
-    console.log('[Overleaf CC] ✓ Terminal button injected into toolbar!');
+    // Fallback: append to menu bar
+    menuBar.appendChild(terminalButton);
+    console.log('[Overleaf CC] ✓ Terminal button injected into menu bar!');
   }
 }
 
