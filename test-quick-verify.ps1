@@ -5,12 +5,8 @@
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
 
-# 尝试设置控制台代码页为 UTF-8 (Windows 10+)
-try {
-    & chcp 65001 | Out-Null
-} catch {
-    # 如果失败，忽略（旧版本 Windows）
-}
+# 设置控制台代码页为 UTF-8 (忽略错误)
+chcp 65001 | Out-Null
 
 $ErrorActionPreference = "Stop"
 
