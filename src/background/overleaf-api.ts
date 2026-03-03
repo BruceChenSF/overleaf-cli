@@ -13,25 +13,29 @@ export class OverleafAPI {
       allCookies = allCookies.concat(cookies);
     }
 
-    console.log('[Overleaf API] Total cookies found:', allCookies.map(c => ({
-      name: c.name,
-      domain: c.domain
-    })));
+    // Log ALL cookies with full details
+    console.log('[Overleaf API] All cookies found:');
+    allCookies.forEach((c, i) => {
+      console.log(`  ${i + 1}. name="${c.name}" domain="${c.domain}" value="${c.value.substring(0, 30)}..."`);
+    });
 
+    // Try multiple possible session cookie names
     const sessionCookie = allCookies.find(
-      c => c.name === 'overleaf_session_id' || c.name === 'connect.sid' || c.name === 'koa.sid'
+      c => c.name === 'overleaf_session_id' ||
+           c.name === 'connect.sid' ||
+           c.name === 'koa.sid' ||
+           c.name === 'sessionId' ||
+           c.name.includes('session') ||
+           c.name.includes('sid')
     );
 
     if (!sessionCookie?.value) {
-      console.error('[Overleaf API] No session cookie found. Available cookies:', allCookies.map(c => ({
-        name: c.name,
-        domain: c.domain,
-        value: c.value.substring(0, 20) + '...'
-      })));
+      console.error('[Overleaf API] No session cookie found!');
+      console.error('[Overleaf API] Available cookie names:', allCookies.map(c => c.name).join(', '));
       throw new Error('Not logged in to Overleaf');
     }
 
-    console.log('[Overleaf API] Session cookie found:', sessionCookie.name, 'domain:', sessionCookie.domain);
+    console.log('[Overleaf API] ✓ Session cookie found:', sessionCookie.name, 'domain:', sessionCookie.domain);
     return sessionCookie.value;
   }
 
@@ -63,16 +67,27 @@ export class OverleafAPI {
   }
 
   private async getCookieInfo(): Promise<{ name: string; domain: string }> {
+    let allCookies: chrome.cookies.Cookie[] = [];
+
     for (const domain of OVERLEAF_DOMAINS) {
       const cookies = await chrome.cookies.getAll({ domain });
-      const sessionCookie = cookies.find(
-        c => c.name === 'overleaf_session_id' || c.name === 'connect.sid' || c.name === 'koa.sid'
-      );
-      if (sessionCookie) {
-        return { name: sessionCookie.name, domain: sessionCookie.domain || '' };
-      }
+      allCookies = allCookies.concat(cookies);
     }
-    throw new Error('Not logged in to Overleaf');
+
+    const sessionCookie = allCookies.find(
+      c => c.name === 'overleaf_session_id' ||
+           c.name === 'connect.sid' ||
+           c.name === 'koa.sid' ||
+           c.name === 'sessionId' ||
+           c.name.includes('session') ||
+           c.name.includes('sid')
+    );
+
+    if (!sessionCookie) {
+      throw new Error('Not logged in to Overleaf');
+    }
+
+    return { name: sessionCookie.name, domain: sessionCookie.domain || '' };
   }
 
   async getAllDocs(projectId: string): Promise<OverleafDoc[]> {
