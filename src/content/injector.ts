@@ -58,34 +58,65 @@ async function openTerminal(): Promise<void> {
 }
 
 function injectButton(): void {
+  console.log('[Overleaf CC] Attempting to inject button...');
+  console.log('[Overleaf CC] Current URL:', window.location.href);
+  console.log('[Overleaf CC] Project ID:', extractProjectId());
+
   // Find the toolbar nav
   const toolbar = document.querySelector('.ide-redesign-toolbar nav');
 
   if (!toolbar) {
-    console.log('Overleaf toolbar not found, retrying...');
+    console.log('[Overleaf CC] Toolbar not found (.ide-redesign-toolbar nav)');
+    console.log('[Overleaf CC] Available toolbars:', document.querySelectorAll('[class*="toolbar"]'));
+
+    // Try alternative selectors
+    const altToolbar = document.querySelector('nav');
+    const allNavs = document.querySelectorAll('nav');
+
+    console.log('[Overleaf CC] Found <nav> elements:', allNavs.length);
+
+    if (allNavs.length > 0) {
+      allNavs.forEach((nav, i) => {
+        console.log(`[Overleaf CC] Nav ${i}:`, nav.className, nav.id);
+      });
+    }
+
     return;
   }
 
+  console.log('[Overleaf CC] Toolbar found!', toolbar);
+
   // Check if button already exists
   if (document.getElementById('overleaf-cc-terminal-btn')) {
+    console.log('[Overleaf CC] Button already exists');
     return;
   }
 
   // Insert button
   const button = createTerminalButton();
   toolbar.appendChild(button);
-  console.log('Terminal button injected');
+  console.log('[Overleaf CC] ✓ Terminal button injected successfully!');
 }
 
 function init(): void {
+  console.log('[Overleaf CC] Content script loaded');
+  console.log('[Overleaf CC] Page ready state:', document.readyState);
+
   // Wait for page to load
   if (document.readyState === 'loading') {
+    console.log('[Overleaf CC] Waiting for DOMContentLoaded...');
     document.addEventListener('DOMContentLoaded', () => {
+      console.log('[Overleaf CC] DOMContentLoaded fired');
       setTimeout(injectButton, 1000);
     });
   } else {
+    console.log('[Overleaf CC] Page already loaded, scheduling injection...');
     setTimeout(injectButton, 1000);
   }
+
+  // Also try after a longer delay
+  setTimeout(injectButton, 3000);
+  setTimeout(injectButton, 5000);
 }
 
 init();
