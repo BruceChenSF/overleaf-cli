@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Overleaf CC",
   "version": "0.1.0",
-  "description": "Run Claude Code CLI in Overleaf",
+  "description": "Run Claude Code CLI in Overleaf via local bridge server",
   "permissions": [
     "cookies",
     "storage",
@@ -34,12 +34,6 @@
     "16": "public/icons/icon16.png",
     "48": "public/icons/icon48.png",
     "128": "public/icons/icon128.png"
-  },
-  "cross_origin_embedder_policy": {
-    "value": "require-corp"
-  },
-  "cross_origin_opener_policy": {
-    "value": "same-origin"
   },
   "web_accessible_resources": [
     {
