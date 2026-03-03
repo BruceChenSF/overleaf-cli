@@ -29,9 +29,13 @@ async function handleMessage(message: ExtensionMessage): Promise<any> {
 }
 
 async function openTerminal(message: OpenTerminalMessage): Promise<{ windowId: number }> {
+  console.log('[Service Worker] OPEN_TERMINAL request received:', message);
+
   try {
     await overleafAPI['getSessionCookie']();
+    console.log('[Service Worker] Session validated successfully');
   } catch (err) {
+    console.error('[Service Worker] Session validation failed:', err);
     throw new Error('Please login to Overleaf first');
   }
 

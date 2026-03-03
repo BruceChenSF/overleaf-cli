@@ -82,19 +82,19 @@ function injectIntoMenuBar(menuBar: Element): void {
     return;
   }
 
-  // Find the File button to use as reference
-  const fileButton = menuBar.querySelector('#toolbar-menu-bar-item-file');
+  // Find the Help button to use as reference
+  const helpButton = menuBar.querySelector('#toolbar-menu-bar-item-help');
 
   // Create the terminal button
   const terminalButton = createTerminalButton();
 
-  if (fileButton && fileButton.parentElement) {
-    // Insert after the File button
-    fileButton.parentElement.parentNode?.insertBefore(
+  if (helpButton && helpButton.parentElement) {
+    // Insert after the Help button
+    helpButton.parentElement.parentNode?.insertBefore(
       terminalButton,
-      fileButton.parentElement.nextSibling
+      helpButton.parentElement.nextSibling
     );
-    console.log('[Overleaf CC] ✓ Terminal button injected after File button!');
+    console.log('[Overleaf CC] ✓ Terminal button injected after Help button!');
   } else {
     // Fallback: append to menu bar
     menuBar.appendChild(terminalButton);

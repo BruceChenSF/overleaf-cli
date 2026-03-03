@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(superpowers:brainstorming)",
+      "Bash(mkdir:*)",
+      "Bash(git init:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Skill(superpowers:writing-plans)",
+      "Bash(git worktree add:*)",
+      "Skill(superpowers:executing-plans)",
+      "Bash(npm install:*)",
+      "Bash(npx:*)",
+      "Bash(npm run build:*)",
+      "Skill(superpowers:finishing-a-development-branch)",
+      "Bash(npm test)",
+      "Bash(git worktree:*)",
+      "Bash(git branch:*)",
+      "Bash(cat:*)"
+    ]
+  },
+  "enabledPlugins": {
+    "superpowers@superpowers-marketplace": true
+  }
+}

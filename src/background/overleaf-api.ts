@@ -8,14 +8,22 @@ export class OverleafAPI {
       domain: OVERLEAF_DOMAIN
     });
 
+    console.log('[Overleaf API] Found cookies:', cookies.map(c => c.name));
+
     const sessionCookie = cookies.find(
       c => c.name === 'overleaf_session_id' || c.name === 'connect.sid'
     );
 
     if (!sessionCookie?.value) {
+      console.error('[Overleaf API] No session cookie found. Available cookies:', cookies.map(c => ({
+        name: c.name,
+        domain: c.domain,
+        value: c.value.substring(0, 20) + '...'
+      })));
       throw new Error('Not logged in to Overleaf');
     }
 
+    console.log('[Overleaf API] Session cookie found:', sessionCookie.name);
     return sessionCookie.value;
   }
 
