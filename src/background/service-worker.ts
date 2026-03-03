@@ -1,13 +1,15 @@
 import { overleafAPI } from './overleaf-api';
+import { SyncManager } from './sync-manager';
 import type { ExtensionMessage, OpenTerminalMessage, SyncFileMessage } from '../shared/types';
 
 let terminalWindowId: number | null = null;
+const syncManagers = new Map<string, SyncManager>();
 
 chrome.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendResponse) => {
   handleMessage(message).then(sendResponse).catch(err => {
     sendResponse({ error: err.message });
   });
-  return true; // Keep message channel open for async response
+  return true;
 });
 
 async function handleMessage(message: ExtensionMessage): Promise<any> {
@@ -27,14 +29,12 @@ async function handleMessage(message: ExtensionMessage): Promise<any> {
 }
 
 async function openTerminal(message: OpenTerminalMessage): Promise<{ windowId: number }> {
-  // Validate session first
   try {
     await overleafAPI['getSessionCookie']();
   } catch (err) {
     throw new Error('Please login to Overleaf first');
   }
 
-  // Close existing terminal if open
   if (terminalWindowId !== null) {
     try {
       await chrome.windows.remove(terminalWindowId);
@@ -43,7 +43,6 @@ async function openTerminal(message: OpenTerminalMessage): Promise<{ windowId: n
     }
   }
 
-  // Create new terminal window
   const window = await chrome.windows.create({
     url: chrome.runtime.getURL('terminal/index.html'),
     type: 'popup',
@@ -54,7 +53,6 @@ async function openTerminal(message: OpenTerminalMessage): Promise<{ windowId: n
 
   terminalWindowId = window.id ?? null;
 
-  // Store project context for the window
   await chrome.storage.session.set({
     [`window_${window.id}`]: {
       projectId: message.projectId,
@@ -62,12 +60,24 @@ async function openTerminal(message: OpenTerminalMessage): Promise<{ windowId: n
     }
   });
 
+  // Initialize sync manager
+  const docs = await overleafAPI.getAllDocs(message.projectId);
+  const syncManager = new SyncManager(message.projectId);
+  await syncManager.init(docs);
+  syncManagers.set(message.projectId, syncManager);
+
   return { windowId: window.id ?? 0 };
 }
 
 async function syncFile(message: SyncFileMessage): Promise<void> {
-  // TODO: Implement file sync with doc ID lookup
-  console.log('Syncing file:', message.filepath);
+  const syncManager = syncManagers.get(message.projectId);
+
+  if (!syncManager) {
+    console.warn(`No sync manager for project ${message.projectId}`);
+    return;
+  }
+
+  await syncManager.syncFile(message.filepath, message.content);
 }
 
 async function fetchProjectFiles(projectId: string): Promise<any> {
