@@ -43,7 +43,7 @@ async function openTerminal(message: OpenTerminalMessage): Promise<{ windowId: n
   }
 
   const window = await chrome.windows.create({
-    url: chrome.runtime.getURL('terminal/index.html'),
+    url: chrome.runtime.getURL('src/terminal/index.html'),
     type: 'popup',
     width: 900,
     height: 600,
