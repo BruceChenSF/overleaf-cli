@@ -13,7 +13,19 @@ export class WebContainerBridge {
 
   async init(): Promise<void> {
     try {
-      this.wc = await WebContainer.boot();
+      console.log('[WebContainer] Starting boot...');
+      this.terminal.writeln('[1/4] Booting WebContainer...');
+
+      // Add timeout
+      const bootPromise = WebContainer.boot();
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('WebContainer boot timeout (30s)')), 30000)
+      );
+
+      this.wc = await Promise.race([bootPromise, timeoutPromise]) as WebContainer;
+
+      console.log('[WebContainer] Boot complete!');
+      this.terminal.writeln('[2/4] Setting up project files...');
 
       // TODO: Fetch project files from Overleaf (API integration disabled for now)
       // const files = await this.fetchProjectFiles();
@@ -28,22 +40,42 @@ export class WebContainerBridge {
       // Mount files to workspace
       await this.wc.mount(files);
 
+      console.log('[WebContainer] Files mounted');
+      this.terminal.writeln('[3/4] Installing Claude Code CLI (this may take a minute)...');
+
       // Install claude-code
-      this.terminal.writeln('Installing Claude Code CLI...');
       const installProcess = await this.wc.spawn('npm', ['install', '-g', '@anthropic-ai/claude-code']);
 
+      console.log('[WebContainer] Install process spawned, waiting for completion...');
+
       const exitCode = await installProcess.exit;
+      console.log('[WebContainer] Install exit code:', exitCode);
+
       if (exitCode !== 0) {
         this.terminal.writeln('\x1b[33mWarning: Claude Code installation may have issues\x1b[0m');
       } else {
         this.terminal.writeln('\x1b[32mClaude Code installed!\x1b[0m');
       }
 
+      console.log('[WebContainer] Starting shell...');
+      this.terminal.writeln('[4/4] Starting shell...');
+
       // Start shell
       await this.startShell();
 
+      console.log('[WebContainer] Init complete!');
+
     } catch (err) {
+      console.error('[WebContainer] Init failed:', err);
       this.terminal.writeln(`\x1b[31mWebContainer init failed: ${(err as Error).message}\x1b[0m`);
+
+      if ((err as Error).message.includes('timeout')) {
+        this.terminal.writeln('\x1b[33mPossible reasons:\x1b[0m');
+        this.terminal.writeln('- Network connection to Stackblitz failed');
+        this.terminal.writeln('- WebContainer API is blocked in this environment');
+        this.terminal.writeln('- Firewall or proxy preventing WASM download');
+      }
+
       throw err;
     }
   }
