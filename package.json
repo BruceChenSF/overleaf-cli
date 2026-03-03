@@ -1,0 +1,23 @@
+{
+  "name": "overleaf-cc",
+  "version": "0.1.0",
+  "description": "Browser extension for running Claude Code in Overleaf",
+  "type": "module",
+  "scripts": {
+    "dev": "vite build --watch --mode development",
+    "build": "vite build",
+    "test": "echo \"TODO: add tests\""
+  },
+  "dependencies": {
+    "xterm": "^5.3.0",
+    "xterm-addon-fit": "^0.8.0",
+    "@webcontainer/api": "^1.1.0"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.258",
+    "@types/node": "^20.11.0",
+    "@crxjs/vite-plugin": "^2.0.0-beta.23",
+    "typescript": "^5.3.3",
+    "vite": "^5.0.11"
+  }
+}
