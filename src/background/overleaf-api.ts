@@ -53,17 +53,27 @@ export class OverleafAPI {
       ? 'https://cn.overleaf.com'
       : 'https://www.overleaf.com';
 
-    console.log('[Overleaf API] Fetching:', baseUrl + endpoint);
+    const url = baseUrl + endpoint;
+    console.log('[Overleaf API] Fetching:', url);
+    console.log('[Overleaf API] Method:', options?.method || 'GET');
+    console.log('[Overleaf API] Cookie:', `${cookieInfo.name}=${sessionId.substring(0, 20)}...`);
 
-    return fetch(baseUrl + endpoint, {
-      ...options,
-      headers: {
-        'Cookie': `${cookieInfo.name}=${sessionId}`,
-        'Content-Type': 'application/json',
-        ...options?.headers
-      },
-      credentials: 'include'
-    });
+    try {
+      const response = await fetch(url, {
+        ...options,
+        headers: {
+          'Cookie': `${cookieInfo.name}=${sessionId}`,
+          'Content-Type': 'application/json',
+          ...options?.headers
+        },
+        credentials: 'include'
+      });
+
+      return response;
+    } catch (error) {
+      console.error('[Overleaf API] Fetch error:', error);
+      throw error;
+    }
   }
 
   private async getCookieInfo(): Promise<{ name: string; domain: string }> {
@@ -91,14 +101,27 @@ export class OverleafAPI {
   }
 
   async getAllDocs(projectId: string): Promise<OverleafDoc[]> {
-    const response = await this.fetchAPI(`/api/project/${projectId}/docs`);
+    const endpoint = `/api/project/${projectId}/docs`;
+    console.log('[Overleaf API] Fetching docs for project:', projectId);
+
+    const response = await this.fetchAPI(endpoint);
+
+    console.log('[Overleaf API] Response status:', response.status, response.statusText);
+    console.log('[Overleaf API] Response headers:', response.headers);
 
     if (!response.ok) {
-      throw new Error(`Failed to fetch docs: ${response.statusText}`);
+      const errorText = await response.text();
+      console.error('[Overleaf API] Error response body:', errorText);
+      throw new Error(`Failed to fetch docs: ${response.status} ${response.statusText} - ${errorText}`);
     }
 
     const data = await response.json();
-    return data.docs || [];
+    console.log('[Overleaf API] Response data:', data);
+
+    const docs = data.docs || [];
+    console.log('[Overleaf API] Parsed docs:', docs.length, 'documents');
+
+    return docs;
   }
 
   async getDocContent(projectId: string, docId: string): Promise<string> {
