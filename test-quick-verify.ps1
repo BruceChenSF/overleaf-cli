@@ -7,8 +7,7 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 
 # 尝试设置控制台代码页为 UTF-8 (Windows 10+)
 try {
-    [Console]::OutputEncoding = [System.Text.Encoding]::GetEncoding(65001)
-    chcp 65001 | Out-Null
+    & chcp 65001 | Out-Null
 } catch {
     # 如果失败，忽略（旧版本 Windows）
 }
@@ -45,12 +44,16 @@ Write-Host ""
 
 # Check Node.js
 try {
-    $nodeVersion = node --version
-    $versionNumber = [version]($nodeVersion -replace 'v', '')
-    if ($versionNumber -ge [version]"18.0.0") {
-        Check-Pass "Node.js version: $nodeVersion"
+    $nodeVersion = node --version 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $versionNumber = [version]($nodeVersion -replace 'v', '')
+        if ($versionNumber -ge [version]"18.0.0") {
+            Check-Pass "Node.js version: $nodeVersion"
+        } else {
+            Check-Fail "Node.js version too old: $nodeVersion (need 18+)"
+        }
     } else {
-        Check-Fail "Node.js version too old: $nodeVersion (need 18+)"
+        Check-Fail "Node.js not found"
     }
 } catch {
     Check-Fail "Node.js not found"
@@ -58,8 +61,12 @@ try {
 
 # Check npm
 try {
-    $npmVersion = npm --version
-    Check-Pass "npm version: $npmVersion"
+    $npmVersion = npm --version 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        Check-Pass "npm version: $npmVersion"
+    } else {
+        Check-Fail "npm not found"
+    }
 } catch {
     Check-Fail "npm not found"
 }
@@ -179,7 +186,7 @@ Write-Host ""
 if (Test-Path "packages\bridge\overleaf-workspace") {
     Check-Pass "Workspace directory exists"
 
-    $projectCount = (Get-ChildItem "packages\bridge\overleaf-workspace" -Directory).Count
+    $projectCount = (Get-ChildItem "packages\bridge\overleaf-workspace" -Directory -ErrorAction SilentlyContinue).Count
     if ($projectCount -gt 0) {
         Check-Warn "Workspace has $projectCount project(s) - consider cleaning for fresh test"
     }
@@ -202,7 +209,7 @@ if ($Fail -eq 0) {
     Write-Host "2. Load extension in Chrome (chrome://extensions/)"
     Write-Host "3. Open Overleaf project and click Terminal button"
     Write-Host ""
-    Write-Host "See test plan: docs\testing\systematic-test-plan.md"
+    Write-Host "See test plan: docs\testing\WINDOWS-TEST-GUIDE.md"
     exit 0
 } else {
     Write-Host "✗ Some checks failed. Please fix the above issues before testing." -ForegroundColor Red
