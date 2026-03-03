@@ -1,6 +1,6 @@
 import { Terminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
-import { WebContainerBridge } from './web-container-bridge';
+import { WebSocketClient } from './websocket-client';
 import 'xterm/css/xterm.css';
 
 const terminal = new Terminal({
@@ -18,6 +18,9 @@ const terminal = new Terminal({
 const fitAddon = new FitAddon();
 terminal.loadAddon(fitAddon);
 
+let wsClient: WebSocketClient | null = null;
+let currentLine = '';
+
 async function init(): Promise<void> {
   console.log('[Terminal UI] Starting initialization...');
 
@@ -32,73 +35,68 @@ async function init(): Promise<void> {
   fitAddon.fit();
   console.log('[Terminal UI] Terminal opened');
 
-  // Handle window resize
   window.addEventListener('resize', () => {
     fitAddon.fit();
   });
 
-  // Get project context from storage
-  console.log('[Terminal UI] Getting project context...');
-
-  // Get current window
+  // Get project context
   const currentWindow = await chrome.windows.getCurrent();
-  console.log('[Terminal UI] Current window:', currentWindow);
   const windowId = currentWindow.id;
-  console.log('[Terminal UI] Window ID:', windowId);
-
   const context = await chrome.storage.session.get(`window_${windowId}`);
-  console.log('[Terminal UI] Storage context:', context);
   const projectContext = context[`window_${windowId}`];
 
   if (!projectContext) {
-    console.error('[Terminal UI] Project context not found!');
     terminal.writeln('\x1b[31mError: Project context not found\x1b[0m');
     terminal.writeln('Please close this window and open terminal from Overleaf again.');
     return;
   }
-
-  console.log('[Terminal UI] Project context:', projectContext);
 
   // Show welcome message
   terminal.writeln('\x1b[1m\x1b[32mOverleaf CC Terminal\x1b[0m');
   terminal.writeln('Project ID: ' + projectContext.projectId);
   terminal.writeln('');
 
-  // Try to initialize WebContainer
-  console.log('[Terminal UI] Initializing WebContainer...');
-  terminal.writeln('Initializing WebContainer...');
+  // Get session cookie
+  const sessionCookie = await getSessionCookie();
 
-  const bridge = new WebContainerBridge(terminal, projectContext.projectId);
+  if (!sessionCookie) {
+    terminal.writeln('\x1b[31mError: Could not find Overleaf session cookie\x1b[0m');
+    terminal.writeln('Please make sure you are logged in to Overleaf.');
+    return;
+  }
+
+  // Detect domain
+  const domain = projectContext.projectUrl.includes('cn.overleaf.com') ? 'cn.overleaf.com' : 'overleaf.com';
+
+  // Connect to bridge server
+  terminal.writeln('Connecting to bridge server...');
+  wsClient = new WebSocketClient(terminal);
 
   try {
-    await bridge.init();
-    terminal.writeln('\x1b[32mWebContainer ready!\x1b[0m');
+    await wsClient.connect(projectContext.projectId, sessionCookie, domain);
+    terminal.writeln('\x1b[32mConnected!\x1b[0m');
+    terminal.writeln('Files are being synchronized from Overleaf...');
+    terminal.writeln('');
     terminal.writeln('Type commands or use Claude Code CLI.');
-  } catch (err) {
-    console.error('[Terminal UI] WebContainer failed:', err);
-    terminal.writeln('\x1b[31mWebContainer initialization failed.\x1b[0m');
     terminal.writeln('');
-    terminal.writeln('\x1b[33mFalling back to simple terminal mode.\x1b[0m');
-    terminal.writeln('Note: File sync and Claude Code are not available in this mode.');
+    showPrompt();
+  } catch (error) {
+    terminal.writeln('\x1b[31mFailed to connect to bridge server\x1b[0m');
     terminal.writeln('');
-    initSimpleMode(terminal);
+    terminal.writeln('Please make sure the bridge server is running:');
+    terminal.writeln('  1. Install: npm install -g @overleaf-cc/bridge');
+    terminal.writeln('  2. Run: overleaf-cc-bridge');
+    terminal.writeln('');
   }
-}
 
-function initSimpleMode(terminal: Terminal): void {
-  let currentLine = '';
-  let prompt = '\x1b[1m\x1b[36moverleaf\x1b[0m:\x1b[1m\x1b[34m~\x1b[0m$ ';
-
-  terminal.writeln('Simple terminal initialized. Type "help" for available commands.');
-  terminal.write(prompt);
-
+  // Set up input handling
   terminal.onData((data) => {
-    if (data === '\r') { // Enter
+    if (data === '\r') {
       terminal.writeln('');
-      handleCommand(currentLine.trim(), terminal);
+      handleCommand(currentLine.trim());
       currentLine = '';
-      terminal.write(prompt);
-    } else if (data === '\u007F') { // Backspace
+      showPrompt();
+    } else if (data === '\u007F') {
       if (currentLine.length > 0) {
         currentLine = currentLine.slice(0, -1);
         terminal.write('\b \b');
@@ -110,38 +108,65 @@ function initSimpleMode(terminal: Terminal): void {
   });
 }
 
-function handleCommand(cmd: string, terminal: Terminal): void {
-  const args = cmd.split(' ');
-  const command = args[0].toLowerCase();
+function showPrompt(): void {
+  terminal.write('\x1b[1m\x1b[36moverleaf\x1b[0m:\x1b[1m\x1b[34m~\x1b[0m$ ');
+}
 
-  switch (command) {
-    case 'help':
-      terminal.writeln('Available commands:');
-      terminal.writeln('  help     - Show this help message');
-      terminal.writeln('  clear    - Clear the terminal');
-      terminal.writeln('  echo     - Echo arguments');
-      terminal.writeln('  date     - Show current date/time');
-      terminal.writeln('  version  - Show version info');
-      break;
+async function handleCommand(command: string): Promise<void> {
+  if (!command) return;
+
+  const [cmd, ...args] = command.split(' ');
+
+  switch (cmd) {
     case 'clear':
       terminal.clear();
       break;
-    case 'echo':
-      terminal.writeln(args.slice(1).join(' '));
+
+    case 'claude':
+      if (wsClient) {
+        terminal.writeln('Starting Claude Code...');
+        wsClient.sendCommand('claude', args);
+      }
       break;
-    case 'date':
-      terminal.writeln(new Date().toString());
+
+    case 'npm':
+    case 'node':
+    case 'npx':
+      if (wsClient) {
+        wsClient.sendCommand(cmd, args);
+      } else {
+        terminal.writeln('\x1b[31mNot connected to bridge server\x1b[0m');
+      }
       break;
-    case 'version':
-      terminal.writeln('Overleaf CC v0.1.0 (Simple Mode)');
-      terminal.writeln('WebContainer: Not available');
+
+    case 'help':
+      terminal.writeln('Available commands:');
+      terminal.writeln('  claude   - Run Claude Code CLI');
+      terminal.writeln('  npm      - Run npm commands');
+      terminal.writeln('  node     - Run Node.js');
+      terminal.writeln('  npx      - Run npx packages');
+      terminal.writeln('  clear    - Clear terminal');
+      terminal.writeln('  help     - Show this help');
       break;
-    case '':
-      break;
+
     default:
-      terminal.writeln(`Command not found: ${command}`);
+      terminal.writeln(`Command not found: ${cmd}`);
       terminal.writeln('Type "help" for available commands.');
   }
+}
+
+async function getSessionCookie(): Promise<string | null> {
+  const cookies = await chrome.cookies.getAll({});
+
+  const sessionCookie = cookies.find(
+    c => c.name === 'overleaf_session_id' ||
+         c.name === 'connect.sid' ||
+         c.name === 'koa.sid' ||
+         c.name.includes('session') ||
+         c.name.includes('sid')
+  );
+
+  return sessionCookie?.value || null;
 }
 
 init().catch(err => {
