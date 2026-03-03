@@ -1,21 +1,29 @@
 import type { OverleafDoc } from '../shared/types';
 
-const OVERLEAF_DOMAIN = 'overleaf.com';
+const OVERLEAF_DOMAINS = ['overleaf.com', 'cn.overleaf.com'];
 
 export class OverleafAPI {
   private async getSessionCookie(): Promise<string> {
-    const cookies = await chrome.cookies.getAll({
-      domain: OVERLEAF_DOMAIN
-    });
+    // Try all possible Overleaf domains
+    let allCookies: chrome.cookies.Cookie[] = [];
 
-    console.log('[Overleaf API] Found cookies:', cookies.map(c => c.name));
+    for (const domain of OVERLEAF_DOMAINS) {
+      const cookies = await chrome.cookies.getAll({ domain });
+      console.log(`[Overleaf API] Found ${cookies.length} cookies for domain: ${domain}`);
+      allCookies = allCookies.concat(cookies);
+    }
 
-    const sessionCookie = cookies.find(
-      c => c.name === 'overleaf_session_id' || c.name === 'connect.sid'
+    console.log('[Overleaf API] Total cookies found:', allCookies.map(c => ({
+      name: c.name,
+      domain: c.domain
+    })));
+
+    const sessionCookie = allCookies.find(
+      c => c.name === 'overleaf_session_id' || c.name === 'connect.sid' || c.name === 'koa.sid'
     );
 
     if (!sessionCookie?.value) {
-      console.error('[Overleaf API] No session cookie found. Available cookies:', cookies.map(c => ({
+      console.error('[Overleaf API] No session cookie found. Available cookies:', allCookies.map(c => ({
         name: c.name,
         domain: c.domain,
         value: c.value.substring(0, 20) + '...'
@@ -23,22 +31,48 @@ export class OverleafAPI {
       throw new Error('Not logged in to Overleaf');
     }
 
-    console.log('[Overleaf API] Session cookie found:', sessionCookie.name);
+    console.log('[Overleaf API] Session cookie found:', sessionCookie.name, 'domain:', sessionCookie.domain);
     return sessionCookie.value;
+  }
+
+  private getBaseUrl(): string {
+    // Detect if using CN version
+    return 'https://www.overleaf.com'; // Default
   }
 
   private async fetchAPI(endpoint: string, options?: RequestInit): Promise<Response> {
     const sessionId = await this.getSessionCookie();
+    const cookieInfo = await this.getCookieInfo();
 
-    return fetch(`https://www.overleaf.com${endpoint}`, {
+    // Use the same domain as the cookie
+    const baseUrl = cookieInfo.domain.includes('cn')
+      ? 'https://cn.overleaf.com'
+      : 'https://www.overleaf.com';
+
+    console.log('[Overleaf API] Fetching:', baseUrl + endpoint);
+
+    return fetch(baseUrl + endpoint, {
       ...options,
       headers: {
-        'Cookie': `overleaf_session_id=${sessionId}`,
+        'Cookie': `${cookieInfo.name}=${sessionId}`,
         'Content-Type': 'application/json',
         ...options?.headers
       },
       credentials: 'include'
     });
+  }
+
+  private async getCookieInfo(): Promise<{ name: string; domain: string }> {
+    for (const domain of OVERLEAF_DOMAINS) {
+      const cookies = await chrome.cookies.getAll({ domain });
+      const sessionCookie = cookies.find(
+        c => c.name === 'overleaf_session_id' || c.name === 'connect.sid' || c.name === 'koa.sid'
+      );
+      if (sessionCookie) {
+        return { name: sessionCookie.name, domain: sessionCookie.domain || '' };
+      }
+    }
+    throw new Error('Not logged in to Overleaf');
   }
 
   async getAllDocs(projectId: string): Promise<OverleafDoc[]> {

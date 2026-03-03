@@ -39,13 +39,20 @@ async function openTerminal(): Promise<void> {
     projectUrl: window.location.href
   };
 
+  console.log('[Overleaf CC] Sending OPEN_TERMINAL message:', message);
+
   try {
     const response = await chrome.runtime.sendMessage(message);
+    console.log('[Overleaf CC] Received response:', response);
 
     if (response?.error) {
+      console.error('[Overleaf CC] Error response:', response.error);
       alert(`Error: ${response.error}`);
+    } else {
+      console.log('[Overleaf CC] Terminal window opened successfully');
     }
   } catch (err) {
+    console.error('[Overleaf CC] Failed to send message:', err);
     alert(`Failed to open terminal: ${(err as Error).message}`);
   }
 }
