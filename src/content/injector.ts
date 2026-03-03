@@ -62,11 +62,11 @@ function injectButton(): void {
   console.log('[Overleaf CC] Current URL:', window.location.href);
   console.log('[Overleaf CC] Project ID:', extractProjectId());
 
-  // Find the toolbar nav
-  const toolbar = document.querySelector('.ide-redesign-toolbar nav');
+  // Find the toolbar nav (fixed selector)
+  const toolbar = document.querySelector('nav.ide-redesign-toolbar');
 
   if (!toolbar) {
-    console.log('[Overleaf CC] Toolbar not found (.ide-redesign-toolbar nav)');
+    console.log('[Overleaf CC] Toolbar not found (nav.ide-redesign-toolbar)');
     console.log('[Overleaf CC] Available toolbars:', document.querySelectorAll('[class*="toolbar"]'));
 
     // Try alternative selectors
@@ -92,10 +92,25 @@ function injectButton(): void {
     return;
   }
 
-  // Insert button
-  const button = createTerminalButton();
-  toolbar.appendChild(button);
-  console.log('[Overleaf CC] ✓ Terminal button injected successfully!');
+  // Find the actions container to insert button in the right place
+  const actionsContainer = toolbar.querySelector('.ide-redesign-toolbar-actions');
+  if (actionsContainer) {
+    const button = createTerminalButton();
+    // Insert before the button container
+    const buttonContainer = actionsContainer.querySelector('.ide-redesign-toolbar-button-container');
+    if (buttonContainer) {
+      buttonContainer.insertBefore(button, buttonContainer.firstChild);
+      console.log('[Overleaf CC] ✓ Terminal button injected into actions container!');
+    } else {
+      actionsContainer.appendChild(button);
+      console.log('[Overleaf CC] ✓ Terminal button injected into actions!');
+    }
+  } else {
+    // Fallback: append to toolbar
+    const button = createTerminalButton();
+    toolbar.appendChild(button);
+    console.log('[Overleaf CC] ✓ Terminal button injected into toolbar!');
+  }
 }
 
 function init(): void {
