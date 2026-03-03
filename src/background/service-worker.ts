@@ -55,7 +55,9 @@ async function openTerminal(message: OpenTerminalMessage): Promise<{ windowId: n
   await chrome.storage.session.set({
     [`window_${window.id}`]: {
       projectId: message.projectId,
-      projectUrl: message.projectUrl
+      projectUrl: message.projectUrl,
+      csrfToken: message.csrfToken,
+      domain: message.domain
     }
   });
 

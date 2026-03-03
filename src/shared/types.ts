@@ -9,6 +9,8 @@ export interface OpenTerminalMessage {
   type: 'OPEN_TERMINAL';
   projectId: string;
   projectUrl: string;
+  csrfToken: string;
+  domain: 'overleaf.com' | 'cn.overleaf.com';
 }
 
 export interface SyncFileMessage {

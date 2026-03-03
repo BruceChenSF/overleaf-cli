@@ -5,6 +5,15 @@ function extractProjectId(): string | null {
   return match ? match[1] : null;
 }
 
+function extractCSRFToken(): string | null {
+  const metaTag = document.querySelector('meta[name="ol-csrfToken"]') as HTMLMetaElement;
+  return metaTag?.content || null;
+}
+
+function extractDomain(): 'overleaf.com' | 'cn.overleaf.com' {
+  return window.location.hostname === 'cn.overleaf.com' ? 'cn.overleaf.com' : 'overleaf.com';
+}
+
 function createTerminalButton(): HTMLElement {
   // Create a div wrapper similar to the File dropdown structure
   const wrapper = document.createElement('div');
@@ -27,19 +36,30 @@ function createTerminalButton(): HTMLElement {
 
 async function openTerminal(): Promise<void> {
   const projectId = extractProjectId();
+  const csrfToken = extractCSRFToken();
+  const domain = extractDomain();
 
   if (!projectId) {
     alert('Could not identify Overleaf project. Please refresh the page.');
     return;
   }
 
+  if (!csrfToken) {
+    console.error('[Overleaf CC] CSRF token not found');
+    alert('Could not extract CSRF token. Please refresh the page.');
+    return;
+  }
+
   const message: OpenTerminalMessage = {
     type: 'OPEN_TERMINAL',
     projectId,
-    projectUrl: window.location.href
+    projectUrl: window.location.href,
+    csrfToken,
+    domain
   };
 
   console.log('[Overleaf CC] Sending OPEN_TERMINAL message:', message);
+  console.log('[Overleaf CC] CSRF Token (first 10 chars):', csrfToken.substring(0, 10) + '...');
 
   try {
     const response = await chrome.runtime.sendMessage(message);

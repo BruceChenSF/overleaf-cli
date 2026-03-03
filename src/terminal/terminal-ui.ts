@@ -65,15 +65,22 @@ async function init(): Promise<void> {
     return;
   }
 
-  // Detect domain
-  const domain = projectContext.projectUrl.includes('cn.overleaf.com') ? 'cn.overleaf.com' : 'overleaf.com';
+  // Use domain and csrfToken from context
+  const domain = projectContext.domain || 'overleaf.com';
+  const csrfToken = projectContext.csrfToken;
+
+  if (!csrfToken) {
+    terminal.writeln('\x1b[31mError: CSRF token not found\x1b[0m');
+    terminal.writeln('Please close this window and open terminal from Overleaf again.');
+    return;
+  }
 
   // Connect to bridge server
   terminal.writeln('Connecting to bridge server...');
   wsClient = new WebSocketClient(terminal);
 
   try {
-    await wsClient.connect(projectContext.projectId, sessionCookie, domain);
+    await wsClient.connect(projectContext.projectId, sessionCookie, domain, csrfToken);
     terminal.writeln('\x1b[32mConnected!\x1b[0m');
     terminal.writeln('Files are being synchronized from Overleaf...');
     terminal.writeln('');

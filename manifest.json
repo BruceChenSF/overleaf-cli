@@ -19,7 +19,7 @@
   "content_scripts": [
     {
       "matches": ["https://*.overleaf.com/project/*"],
-      "js": ["src/content/injector.ts"],
+      "js": ["src/content/file-reader.ts", "src/content/injector.ts"],
       "run_at": "document_idle"
     }
   ],

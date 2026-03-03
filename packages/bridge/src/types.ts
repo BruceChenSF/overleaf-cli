@@ -1,6 +1,7 @@
 export interface BridgeMessage {
-  type: 'auth' | 'command' | 'response' | 'sync';
+  type: 'auth' | 'command' | 'response' | 'sync' | 'EXTENSION_MESSAGE';
   data: unknown;
+  messageId?: string;
 }
 
 export interface AuthMessage {
@@ -9,6 +10,7 @@ export interface AuthMessage {
     projectId: string;
     sessionCookie: string;
     domain: 'overleaf.com' | 'cn.overleaf.com';
+    csrfToken: string;
   };
 }
 

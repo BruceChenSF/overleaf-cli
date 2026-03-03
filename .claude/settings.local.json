@@ -19,7 +19,10 @@
       "Bash(cat:*)",
       "WebSearch",
       "Bash(node:*)",
-      "Skill(superpowers:systematic-debugging)"
+      "Skill(superpowers:systematic-debugging)",
+      "Bash(powershell:*)",
+      "Bash(grep:*)",
+      "Bash(dir:*)"
     ]
   },
   "enabledPlugins": {
