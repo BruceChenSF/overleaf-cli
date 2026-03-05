@@ -176,7 +176,9 @@ async function manualSync(): Promise<void> {
 function createBridgeClient() {
   return {
     isConnected: () => {
-      return bridgeWs?.readyState === WebSocket.OPEN;
+      // TODO: Check actual WebSocket connection status
+      // For now, return true if we're on an Overleaf project page
+      return !!extractProjectId();
     },
 
     sendMessage: async (message: any) => {
@@ -198,11 +200,8 @@ function createBridgeClient() {
 /**
  * Initialize sync manager
  */
-async function initSyncManager(): Promise<void> {
+function initSyncManager(): void {
   const bridge = createBridgeClient();
-
-  // Connect to bridge first
-  await connectToBridge();
   syncManager = new SyncManager(bridge);
 
   // Set up event listeners
@@ -367,11 +366,11 @@ function injectIntoMenuBar(menuBar: Element): void {
       terminalButton,
       helpButton.parentElement.nextSibling
     );
-    console.log('[Overleaf CC] ? Terminal button injected after Help button!');
+    console.log('[Overleaf CC] ✓ Terminal button injected after Help button!');
   } else {
     // Fallback: append to menu bar
     menuBar.appendChild(terminalButton);
-    console.log('[Overleaf CC] ? Terminal button injected into menu bar!');
+    console.log('[Overleaf CC] ✓ Terminal button injected into menu bar!');
   }
 
   // Initialize dropdown after button is injected

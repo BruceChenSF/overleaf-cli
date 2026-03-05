@@ -22,7 +22,12 @@
       "Skill(superpowers:systematic-debugging)",
       "Bash(powershell:*)",
       "Bash(grep:*)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(findstr:*)",
+      "Bash(npm run typecheck:*)",
+      "Bash(npm run test:*)",
+      "Bash(npm run test:unit:*)",
+      "Bash(git push:*)"
     ]
   },
   "enabledPlugins": {
