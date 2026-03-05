@@ -1,7 +1,10 @@
 export interface BridgeMessage {
-  type: 'auth' | 'command' | 'response' | 'EXTENSION_MESSAGE';
+  type: 'auth' | 'command' | 'response' | 'EXTENSION_MESSAGE' |
+        'GET_ALL_FILES' | 'GET_FILE_CONTENT' | 'SET_FILE_CONTENT' | 'GET_FILE_STATUS';
   data: unknown;
   messageId?: string;
+  requestId?: string;
+  payload?: unknown;
 }
 
 export interface AuthMessage {
@@ -27,4 +30,5 @@ export interface ResponseMessage {
     output?: string;
     error?: string;
   };
+  requestId?: string;
 }

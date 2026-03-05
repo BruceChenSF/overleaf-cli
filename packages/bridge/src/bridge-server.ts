@@ -40,36 +40,62 @@ export class BridgeServer {
     console.log(`[Bridge] WebSocket server listening on port ${port}`);
   }
 
-  private async handleMessage(ws: WebSocket, message: BridgeMessage): Promise<void> {
+  private async handleMessage(ws: WebSocket, message: BridgeMessage & { requestId?: string }): Promise<void> {
+    const requestId = (message as any).requestId;
+
+    // Log incoming message for debugging
+    console.log('[Bridge] Received message:', JSON.stringify({ type: message.type, requestId }));
+
+    // Helper function to send response with requestId
+    const sendResponse = (data: any) => {
+      const response = requestId ? { ...data, requestId } : data;
+      console.log('[Bridge] Sending response:', JSON.stringify(response));
+      ws.send(JSON.stringify(response));
+    };
+
     switch (message.type) {
       case 'auth':
-        await this.handleAuth(ws, message as AuthMessage);
+        await this.handleAuth(ws, message as AuthMessage, sendResponse);
         break;
       case 'command':
-        await this.handleCommand(ws, message as CommandMessage);
+        await this.handleCommand(ws, message as CommandMessage, sendResponse);
+        break;
+      case 'GET_ALL_FILES':
+        await this.handleGetAllFiles(ws, sendResponse);
+        break;
+      case 'GET_FILE_CONTENT':
+        await this.handleGetFileContent(ws, message as any, sendResponse);
+        break;
+      case 'SET_FILE_CONTENT':
+        await this.handleSetFileContent(ws, message as any, sendResponse);
+        break;
+      case 'GET_FILE_STATUS':
+        await this.handleGetFileStatus(ws, message as any, sendResponse);
         break;
       case 'EXTENSION_MESSAGE':
         // Response from extension - handled by SyncManagerDOM
+        console.log('[Bridge] Received EXTENSION_MESSAGE, forwarding to SyncManagerDOM');
         break;
       default:
-        ws.send(JSON.stringify({
+        console.log('[Bridge] Unknown message type:', message.type);
+        sendResponse({
           type: 'response',
           data: { success: false, error: 'Unknown message type' }
-        }));
+        });
     }
   }
 
-  private async handleAuth(ws: WebSocket, message: AuthMessage): Promise<void> {
+  private async handleAuth(ws: WebSocket, message: AuthMessage, sendResponse: (data: any) => void): Promise<void> {
     const { projectId, csrfToken } = message.data;
 
     console.log(`[Bridge] Auth request for project ${projectId}`);
 
     if (!csrfToken) {
       console.error('[Bridge] Missing CSRF token');
-      ws.send(JSON.stringify({
+      sendResponse({
         type: 'response',
         data: { success: false, error: 'Missing CSRF token. Please refresh the Overleaf page and try again.' }
-      }));
+      });
       return;
     }
 
@@ -80,33 +106,36 @@ export class BridgeServer {
     // Create sync manager with WebSocket connection
     const syncManager = new SyncManagerDOM(projectId, projectDir, ws);
 
+    // Store client FIRST, before initial sync
+    // This allows other requests to be handled during sync
+    this.clients.set(ws, { projectId, syncManager });
+    console.log('[Bridge] Client stored, starting initial sync...');
+
     // Initial sync
     try {
       await syncManager.initialSync();
       syncManager.startWatching();
+      console.log('[Bridge] Initial sync completed successfully');
     } catch (error) {
       console.error('[Bridge] Initial sync failed:', error);
       // Don't fail auth - user can still use terminal
     }
 
-    // Store client
-    this.clients.set(ws, { projectId, syncManager });
-
     // Send success response
-    ws.send(JSON.stringify({
+    sendResponse({
       type: 'response',
       data: { success: true, output: 'Connected and synchronized' }
-    }));
+    });
   }
 
-  private async handleCommand(ws: WebSocket, message: CommandMessage): Promise<void> {
+  private async handleCommand(ws: WebSocket, message: CommandMessage, sendResponse: (data: any) => void): Promise<void> {
     const client = this.clients.get(ws);
 
     if (!client) {
-      ws.send(JSON.stringify({
+      sendResponse({
         type: 'response',
         data: { success: false, error: 'Not authenticated' }
-      }));
+      });
       return;
     }
 
@@ -128,19 +157,19 @@ export class BridgeServer {
       childProcess.stdout?.on('data', (data: Buffer) => {
         const text = data.toString();
         output += text;
-        ws.send(JSON.stringify({
+        sendResponse({
           type: 'response',
           data: { success: true, output: text }
-        }));
+        });
       });
 
       childProcess.stderr?.on('data', (data: Buffer) => {
         const text = data.toString();
         errorOutput += text;
-        ws.send(JSON.stringify({
+        sendResponse({
           type: 'response',
           data: { success: false, error: text }
-        }));
+        });
       });
 
       childProcess.on('close', (code: number | null) => {
@@ -148,6 +177,162 @@ export class BridgeServer {
         resolve();
       });
     });
+  }
+
+  private async handleGetAllFiles(ws: WebSocket, sendResponse: (data: any) => void): Promise<void> {
+    const client = this.clients.get(ws);
+
+    if (!client) {
+      sendResponse({
+        type: 'response',
+        data: { success: false, error: 'Not authenticated' }
+      });
+      return;
+    }
+
+    try {
+      const projectDir = path.join(this.workDir, client.projectId);
+      const files = await fs.readdir(projectDir, { withFileTypes: true });
+
+      const fileList = await Promise.all(
+        files.map(async (file) => {
+          const filePath = path.join(projectDir, file.name);
+          const stats = await fs.stat(filePath);
+          return {
+            id: file.name,
+            name: file.name,
+            path: `/${file.name}`,
+            type: file.isDirectory() ? 'folder' : 'doc',
+            modifiedTime: stats.mtimeMs
+          };
+        })
+      );
+
+      sendResponse({
+        type: 'ALL_FILES',
+        payload: fileList
+      });
+    } catch (error) {
+      console.error('[Bridge] Error getting all files:', error);
+      sendResponse({
+        type: 'response',
+        data: { success: false, error: (error as Error).message }
+      });
+    }
+  }
+
+  private async handleGetFileContent(ws: WebSocket, message: any, sendResponse: (data: any) => void): Promise<void> {
+    const client = this.clients.get(ws);
+
+    if (!client) {
+      sendResponse({
+        type: 'response',
+        data: { success: false, error: 'Not authenticated' }
+      });
+      return;
+    }
+
+    try {
+      const { path: filePath } = message.payload;
+      const fullPath = path.join(this.workDir, client.projectId, filePath);
+      const content = await fs.readFile(fullPath, 'utf-8');
+      const checksum = await this.hashContent(content);
+
+      sendResponse({
+        type: 'FILE_CONTENT',
+        payload: {
+          path: filePath,
+          content,
+          checksum
+        }
+      });
+    } catch (error) {
+      console.error('[Bridge] Error getting file content:', error);
+      sendResponse({
+        type: 'response',
+        data: { success: false, error: (error as Error).message }
+      });
+    }
+  }
+
+  private async handleSetFileContent(ws: WebSocket, message: any, sendResponse: (data: any) => void): Promise<void> {
+    const client = this.clients.get(ws);
+
+    if (!client) {
+      sendResponse({
+        type: 'response',
+        data: { success: false, error: 'Not authenticated' }
+      });
+      return;
+    }
+
+    try {
+      const { path: filePath, content } = message.payload;
+      const fullPath = path.join(this.workDir, client.projectId, filePath);
+
+      // Create directory if it doesn't exist
+      await fs.mkdir(path.dirname(fullPath), { recursive: true });
+
+      // Write file
+      await fs.writeFile(fullPath, content, 'utf-8');
+
+      const checksum = await this.hashContent(content);
+
+      sendResponse({
+        type: 'FILE_STATUS',
+        payload: {
+          path: filePath,
+          checksum,
+          modifiedTime: Date.now()
+        }
+      });
+    } catch (error) {
+      console.error('[Bridge] Error setting file content:', error);
+      sendResponse({
+        type: 'response',
+        data: { success: false, error: (error as Error).message }
+      });
+    }
+  }
+
+  private async handleGetFileStatus(ws: WebSocket, message: any, sendResponse: (data: any) => void): Promise<void> {
+    const client = this.clients.get(ws);
+
+    if (!client) {
+      sendResponse({
+        type: 'response',
+        data: { success: false, error: 'Not authenticated' }
+      });
+      return;
+    }
+
+    try {
+      const { path: filePath } = message.payload;
+      const fullPath = path.join(this.workDir, client.projectId, filePath);
+      const content = await fs.readFile(fullPath, 'utf-8');
+      const stats = await fs.stat(fullPath);
+      const checksum = await this.hashContent(content);
+
+      sendResponse({
+        type: 'FILE_STATUS',
+        payload: {
+          path: filePath,
+          checksum,
+          modifiedTime: stats.mtimeMs
+        }
+      });
+    } catch (error) {
+      console.error('[Bridge] Error getting file status:', error);
+      sendResponse({
+        type: 'response',
+        data: { success: false, error: (error as Error).message }
+      });
+    }
+  }
+
+  private async hashContent(content: string): Promise<string> {
+    const crypto = await import('crypto');
+    return crypto.createHash('sha256').update(content).digest('hex');
   }
 
   close(): void {

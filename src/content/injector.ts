@@ -4,6 +4,7 @@ import { stateManager } from './state-manager';
 import { injectNotificationStyles } from './styles';
 import { SyncManager } from './sync-manager';
 import type { ExtensionToBridgeMessage, BridgeToExtensionMessage } from '../shared/types';
+import { OverleafWebSocketClient } from './overleaf-websocket';
 
 // Global dropdown and sync manager instances
 let dropdown: DropdownMenu | null = null;
@@ -188,9 +189,68 @@ async function connectToBridge(): Promise<void> {
       if (!bridgeWs) return reject(new Error('WebSocket not initialized'));
 
       bridgeWs.onopen = () => {
-        console.log('[Overleaf CC] ✓ Connected to bridge');
-        dropdown?.updateConnectionStatus('connected');
-        resolve();
+        console.log('[Overleaf CC] ✓ Connected to bridge, sending auth...');
+
+        // Send auth message
+        const projectId = extractProjectId();
+        const csrfToken = extractCSRFToken();
+
+        if (!projectId || !csrfToken) {
+          console.error('[Overleaf CC] Missing projectId or csrfToken');
+          dropdown?.updateConnectionStatus('error', 'Missing authentication data');
+          reject(new Error('Missing authentication data'));
+          return;
+        }
+
+        const authMessage = {
+          type: 'auth',
+          data: { projectId, csrfToken }
+        };
+
+        console.log('[Overleaf CC] Sending auth message:', JSON.stringify(authMessage));
+        bridgeWs!.send(JSON.stringify(authMessage));
+
+        // Wait for auth response before resolving
+        const authTimeout = setTimeout(() => {
+          reject(new Error('Auth timeout'));
+        }, 5000);
+
+        // Set up one-time listener for auth response
+        const originalOnMessage = bridgeWs!.onmessage;
+        bridgeWs!.onmessage = (event) => {
+          try {
+            const message = JSON.parse(event.data);
+
+            // Check if this is auth response
+            if (message.type === 'response' && message.data?.success) {
+              console.log('[Overleaf CC] ✓ Auth successful');
+              dropdown?.updateConnectionStatus('connected');
+              clearTimeout(authTimeout);
+
+              // Restore original message handler
+              bridgeWs!.onmessage = originalOnMessage;
+
+              // Process this message with original handler
+              if (originalOnMessage) {
+                originalOnMessage(event);
+              }
+
+              resolve();
+            } else if (message.type === 'response' && !message.data?.success) {
+              console.error('[Overleaf CC] Auth failed:', message.data?.error);
+              dropdown?.updateConnectionStatus('error', message.data?.error || 'Auth failed');
+              clearTimeout(authTimeout);
+              reject(new Error(message.data?.error || 'Auth failed'));
+            } else {
+              // Not an auth response, use original handler
+              if (originalOnMessage) {
+                originalOnMessage(event);
+              }
+            }
+          } catch (error) {
+            console.error('[Overleaf CC] Failed to parse auth response:', error);
+          }
+        };
       };
 
       bridgeWs.onerror = (error) => {
@@ -214,8 +274,8 @@ async function connectToBridge(): Promise<void> {
         }
       };
 
-      // Timeout after 5 seconds
-      setTimeout(() => reject(new Error('Bridge connection timeout')), 5000);
+      // Timeout after 10 seconds (increased from 5)
+      setTimeout(() => reject(new Error('Bridge connection timeout')), 10000);
     });
   } catch (error) {
     console.error('[Overleaf CC] Failed to connect to bridge:', error);
@@ -227,27 +287,49 @@ async function connectToBridge(): Promise<void> {
  * Handle message from bridge
  */
 function handleBridgeMessage(message: any): void {
-  // Handle response messages first (for pending requests)
-  if (message.type === 'response' && message.requestId) {
+  // Log raw message for debugging
+  console.log('[Overleaf CC] Raw message from bridge:', JSON.stringify(message));
+
+  // Handle EXTENSION_MESSAGE - forward to file-reader
+  if (message.type === 'EXTENSION_MESSAGE') {
+    console.log('[Overleaf CC] Received EXTENSION_MESSAGE, forwarding to file-reader');
+    handleExtensionMessage(message);
+    return;
+  }
+
+  // Handle messages with requestId (including response type)
+  if (message.requestId) {
+    console.log('[Overleaf CC] Handling message with requestId:', message.requestId, 'type:', message.type);
     const pending = pendingRequests.get(message.requestId);
     if (pending) {
+      console.log('[Overleaf CC] Found pending request for requestId:', message.requestId);
       pendingRequests.delete(message.requestId);
 
-      if (message.data?.success === false || message.data?.error) {
+      // For response type, check for errors
+      if (message.type === 'response' && (message.data?.success === false || message.data?.error)) {
         pending.reject(new Error(message.data?.error || 'Request failed'));
       } else {
-        pending.resolve(message.data);
+        // For all other message types (ALL_FILES, FILE_CONTENT, etc.), resolve with the whole message
+        pending.resolve(message);
       }
+    } else {
+      console.warn('[Overleaf CC] No pending request found for requestId:', message.requestId);
     }
     return;
   }
 
-  // Handle other message types
+  // Log if response type but no requestId (auth response, etc)
+  if (message.type === 'response' && !message.requestId) {
+    console.log('[Overleaf CC] Received response without requestId (likely auth)');
+  }
+
+  // Handle other message types without requestId (events, notifications)
   switch (message.type) {
     case 'FILE_CONTENT':
     case 'FILE_STATUS':
     case 'ALL_FILES':
     case 'FILE_CHANGED':
+      console.log('[Overleaf CC] Forwarding to sync manager:', message.type);
       // Forward to sync manager
       syncManager?.emit(`bridge:${message.type}`, message);
       break;
@@ -267,12 +349,514 @@ function handleBridgeMessage(message: any): void {
       console.error('[Overleaf CC] Bridge error:', message.payload);
       break;
 
-    case 'response':
-      // Generic response without requestId - ignore
-      break;
-
     default:
-      console.log('[Overleaf CC] Unknown message type:', (message as any).type);
+      console.log('[Overleaf CC] Unknown message type:', (message as any).type, 'Full message:', JSON.stringify(message));
+  }
+}
+
+/**
+ * Handle EXTENSION_MESSAGE from bridge - handle file reading requests directly
+ */
+async function handleExtensionMessage(message: any): Promise<void> {
+  try {
+    const { messageId, data } = message;
+
+    if (!data || !data.message) {
+      console.error('[Overleaf CC] Invalid EXTENSION_MESSAGE:', message);
+      return;
+    }
+
+    console.log('[Overleaf CC] Handling EXTENSION_MESSAGE:', data.message.type);
+
+    let response: any;
+
+    // Handle message directly instead of forwarding to file-reader
+    switch (data.message.type) {
+      case 'GET_ALL_FILES':
+        response = await handleGetAllFiles();
+        break;
+
+      case 'SYNC_ALL_FILES':
+        response = await handleSyncAllFiles();
+        break;
+
+      case 'GET_FILE_CONTENT':
+        const filePath = (data.message.payload as any)?.path;
+        response = await handleGetFileContent(filePath);
+        break;
+
+      case 'SET_FILE_CONTENT':
+        const setContentPayload = data.message.payload as any;
+        response = await handleSetFileContent(setContentPayload?.path, setContentPayload?.content);
+        break;
+
+      default:
+        console.error('[Overleaf CC] Unknown message type:', data.message.type);
+        response = { success: false, error: `Unknown message type: ${data.message.type}` };
+    }
+
+    console.log('[Overleaf CC] Sending response to bridge:', JSON.stringify(response).substring(0, 200));
+
+    // Send response back to bridge
+    if (bridgeWs && bridgeWs.readyState === WebSocket.OPEN) {
+      const responseMessage = {
+        type: 'EXTENSION_MESSAGE',
+        messageId,
+        data: response
+      };
+
+      bridgeWs.send(JSON.stringify(responseMessage));
+    } else {
+      console.error('[Overleaf CC] Bridge WebSocket not connected');
+    }
+  } catch (error) {
+    console.error('[Overleaf CC] Error handling EXTENSION_MESSAGE:', error);
+
+    // Send error response back to bridge
+    if (bridgeWs && bridgeWs.readyState === WebSocket.OPEN) {
+      const errorMessage = {
+        type: 'EXTENSION_MESSAGE',
+        messageId: message.messageId,
+        data: {
+          success: false,
+          error: (error as Error).message
+        }
+      };
+
+      bridgeWs.send(JSON.stringify(errorMessage));
+    }
+  }
+}
+
+/**
+ * Sync all files from Overleaf using WebSocket API
+ */
+async function handleSyncAllFiles(): Promise<{ success: boolean; data?: any[]; error?: string }> {
+  console.log('[Overleaf CC] Starting full file sync via WebSocket...');
+
+  try {
+    const projectId = extractProjectId();
+    const csrfToken = extractCSRFToken();
+
+    console.log('[Overleaf CC] Project ID:', projectId);
+    console.log('[Overleaf CC] CSRF Token:', csrfToken ? 'Found' : 'Not found');
+
+    if (!projectId || !csrfToken) {
+      return { success: false, error: 'Missing projectId or csrfToken' };
+    }
+
+    // Get cookies from service worker (which has access to chrome.cookies API)
+    console.log('[Overleaf CC] Requesting cookies from service worker...');
+    const cookieResponse = await chrome.runtime.sendMessage({
+      type: 'GET_COOKIES',
+      domain: window.location.hostname
+    }) as { overleaf_session2?: string; GCLB?: string };
+
+    console.log('[Overleaf CC] Received cookie response:', {
+      overleaf_session2: cookieResponse.overleaf_session2 ? `${cookieResponse.overleaf_session2.substring(0, 10)}...` : undefined,
+      GCLB: cookieResponse.GCLB
+    });
+
+    if (!cookieResponse.overleaf_session2) {
+      console.error('[Overleaf CC] No overleaf_session2 cookie received from service worker');
+      return { success: false, error: 'Missing overleaf_session2 cookie' };
+    }
+
+    const auth = {
+      cookieOverleafSession2: cookieResponse.overleaf_session2,
+      cookieGCLB: cookieResponse.GCLB || '',
+    };
+
+    console.log('[Overleaf CC] Got cookies, connecting to Overleaf WebSocket...');
+
+    // Connect to Overleaf WebSocket
+    const wsClient = new OverleafWebSocketClient();
+    await wsClient.connect(projectId, auth, csrfToken);
+
+    console.log('[Overleaf CC] Connected, waiting for project structure...');
+
+    // Wait for joinProjectResponse to be processed
+    await wsClient.waitForProjectJoin();
+
+    console.log('[Overleaf CC] Project structure received, getting all IDs...');
+
+    // Get all document and file IDs from WebSocket project structure
+    const allIds = wsClient.getAllDocIds();
+    console.log(`[Overleaf CC] Found ${allIds.length} items (documents + files) in project`);
+
+    // Fetch content for each item
+    const syncedFiles: any[] = [];
+    for (const id of allIds) {
+      try {
+        const info = wsClient.getDocInfo(id);
+        if (!info) {
+          console.warn(`[Overleaf CC] No info found for ${id}, skipping`);
+          continue;
+        }
+
+        console.log(`[Overleaf CC] Syncing ${info.path} (id: ${id}, type: ${info.type})...`);
+
+        if (info.type === 'doc') {
+          // Handle document (text file)
+          const lines = await wsClient.joinDoc(id);
+          await wsClient.leaveDoc(id);
+
+          syncedFiles.push({
+            id: id,
+            name: info.name,
+            path: info.path,
+            content: lines.join('\n'),
+            lines: lines
+          });
+
+          console.log(`[Overleaf CC] ✓ Synced ${info.path} (${lines.length} lines)`);
+        } else if (info.type === 'file') {
+          // Handle file (binary file like image, PDF, etc.)
+          const blob = await wsClient.downloadFile(id, projectId);
+
+          // Convert blob to base64
+          const arrayBuffer = await blob.arrayBuffer();
+          const base64 = btoa(new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), ''));
+
+          syncedFiles.push({
+            id: id,
+            name: info.name,
+            path: info.path,
+            content: base64,
+            encoding: 'base64',
+            mimeType: blob.type
+          });
+
+          console.log(`[Overleaf CC] ✓ Synced ${info.path} (${blob.size} bytes, ${blob.type})`);
+        }
+      } catch (error) {
+        console.error(`[Overleaf CC] ✗ Failed to sync ${id}:`, error);
+        // Continue with other files
+      }
+    }
+
+    wsClient.disconnect();
+
+    console.log(`[Overleaf CC] Successfully synced ${syncedFiles.length}/${allIds.length} files`);
+    return { success: true, data: syncedFiles };
+  } catch (error) {
+    console.error('[Overleaf CC] Sync failed:', error);
+    return { success: false, error: (error as Error).message };
+  }
+}
+
+/**
+ * Get all files from Overleaf
+ */
+async function handleGetAllFiles(): Promise<{ success: boolean; data?: any[]; error?: string }> {
+  try {
+    // Get files from Overleaf DOM
+    const files: any[] = [];
+    const windowWithEditor = window as any;
+
+    console.log('[Overleaf CC] Attempting to get file list from Overleaf...');
+
+    // Method 1: Try ee._.document.entities
+    try {
+      if (windowWithEditor.ee?._?.document?.entities) {
+        const entities = windowWithEditor.ee._.document.entities;
+        console.log('[Overleaf CC] Found ee._.document.entities:', Array.isArray(entities) ? entities.length : 'not array');
+        if (Array.isArray(entities)) {
+          for (const entity of entities) {
+            if (entity._id && entity.name && entity.type === 'doc') {
+              files.push({
+                id: entity._id,
+                name: entity.name,
+                path: entity.path || `/${entity.name}`,
+                type: 'doc'
+              });
+            }
+          }
+          if (files.length > 0) {
+            console.log(`[Overleaf CC] Found ${files.length} files from ee._.document.entities`);
+            return { success: true, data: files };
+          }
+        }
+      } else {
+        console.log('[Overleaf CC] ee._.document.entities not found');
+      }
+    } catch (err) {
+      console.error('[Overleaf CC] Error accessing ee._.document.entities:', err);
+    }
+
+    // Method 2: Try __initData
+    if (files.length === 0) {
+      try {
+        const initData = windowWithEditor.__initData;
+        if (initData?.project?.rootFolder?.fileRefs) {
+          const fileRefs = initData.project.rootFolder.fileRefs;
+          console.log('[Overleaf CC] Found __initData.project.rootFolder.fileRefs:', Array.isArray(fileRefs) ? fileRefs.length : 'not array');
+          if (Array.isArray(fileRefs)) {
+            for (const ref of fileRefs) {
+              if (ref._id && ref.name) {
+                files.push({
+                  id: ref._id,
+                  name: ref.name,
+                  path: `/${ref.name}`,
+                  type: 'doc'
+                });
+              }
+            }
+            if (files.length > 0) {
+              console.log(`[Overleaf CC] Found ${files.length} files from __initData`);
+              return { success: true, data: files };
+            }
+          }
+        } else {
+          console.log('[Overleaf CC] __initData.project.rootFolder.fileRefs not found');
+        }
+      } catch (err) {
+        console.error('[Overleaf CC] Error accessing __initData:', err);
+      }
+    }
+
+    // Method 3: Parse file tree DOM (most reliable)
+    if (files.length === 0) {
+      console.log('[Overleaf CC] Trying to parse file tree DOM...');
+      const fileTreeFiles = parseFileTreeDOM();
+      if (fileTreeFiles.length > 0) {
+        console.log(`[Overleaf CC] Found ${fileTreeFiles.length} files from DOM`);
+        return { success: true, data: fileTreeFiles };
+      }
+    }
+
+    // Method 4: Fallback to current document
+    console.log('[Overleaf CC] No files found from tree, falling back to current document');
+    const currentDoc = getCurrentDocumentInfo();
+    if (currentDoc) {
+      files.push({
+        id: currentDoc.id || 'main',
+        name: currentDoc.name || 'main.tex',
+        path: currentDoc.path || '/main.tex',
+        type: 'doc'
+      });
+      console.log(`[Overleaf CC] Using current document as fallback: ${currentDoc.name}`);
+      return { success: true, data: files };
+    }
+
+    console.log('[Overleaf CC] Could not find any files');
+    return { success: true, data: [] };
+  } catch (error) {
+    console.error('[Overleaf CC] Error getting all files:', error);
+    return { success: false, error: (error as Error).message };
+  }
+}
+
+/**
+ * Parse file tree from DOM
+ */
+function parseFileTreeDOM(): any[] {
+  const files: any[] = [];
+
+  try {
+    // Try to find file tree elements
+    const fileTreeSelectors = [
+      '#ide-redesign-file-tree [data-file-id]',
+      '.file-tree-inner [data-file-id]',
+      '[data-test-selector="file-tree-item"]',
+      '#ide-redesign-file-tree .file-tree-list li'
+    ];
+
+    for (const selector of fileTreeSelectors) {
+      const elements = document.querySelectorAll(selector);
+      console.log(`[Overleaf CC] Trying selector "${selector}": found ${elements.length} elements`);
+
+      if (elements.length > 0) {
+        for (const el of elements) {
+          const fileId = el.getAttribute('data-file-id');
+
+          // Try multiple ways to get filename
+          let fileName = el.getAttribute('data-filename');
+
+          if (!fileName) {
+            const nameEl = el.querySelector('.name, .filename, .entity-name, [data-test-selector="file-name"]');
+            if (nameEl) {
+              fileName = nameEl.textContent?.trim();
+            }
+          }
+
+          // Filter out non-file items (buttons, icons, etc.)
+          if (fileId && fileName &&
+              fileName.length > 0 &&
+              fileName.length < 100 &&
+              !fileName.includes('expand_more') &&
+              !fileName.includes('chevron') &&
+              !fileName.includes('more_vert') &&
+              !fileName.includes('menu') &&
+              (fileName.endsWith('.tex') ||
+               fileName.endsWith('.bib') ||
+               fileName.endsWith('.sty') ||
+               fileName.endsWith('.cls') ||
+               fileName.endsWith('.pdf') ||
+               fileName.endsWith('.png') ||
+               fileName.endsWith('.jpg') ||
+               fileName.includes('.') ||
+               fileName === 'main.tex')) {
+
+            files.push({
+              id: fileId,
+              name: fileName,
+              path: `/${fileName}`,
+              type: 'doc'
+            });
+
+            console.log(`[Overleaf CC] Parsed file: ${fileName} (id: ${fileId})`);
+          }
+        }
+
+        if (files.length > 0) {
+          console.log(`[Overleaf CC] Parsed ${files.length} files from DOM using selector "${selector}"`);
+          break;
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[Overleaf CC] Error parsing file tree DOM:', err);
+  }
+
+  return files;
+}
+
+/**
+ * Get current document info
+ */
+function getCurrentDocumentInfo(): { id?: string; name?: string; path?: string } | null {
+  const match = window.location.pathname.match(/\/project\/[^/]+\/(?:doc|folder)\/([^/]+)/);
+  if (match) {
+    const docId = match[1];
+    const docName = (document.querySelector('.document-title') as any)?.textContent ||
+                   document.title.split(' - ')[0] ||
+                   'main.tex';
+    return {
+      id: docId,
+      name: docName,
+      path: `/${docName}`
+    };
+  }
+  return null;
+}
+
+/**
+ * Get file content from Overleaf editor
+ */
+async function handleGetFileContent(path?: string): Promise<{ success: boolean; data?: any; error?: string }> {
+  try {
+    const currentDoc = getCurrentDocumentInfo();
+
+    if (!currentDoc) {
+      return { success: false, error: 'Could not identify current document' };
+    }
+
+    // Check if requested file matches current document
+    if (path && path !== `/${currentDoc.name}` && path !== currentDoc.path) {
+      console.log(`[Overleaf CC] Requested file ${path} is not current document (${currentDoc.name}), skipping`);
+      // Return special error to tell Bridge to skip this file
+      return { success: false, error: 'FILE_NOT_OPEN', skip: true };
+    }
+
+    const content = getCurrentDocumentContent();
+
+    if (content === null) {
+      return { success: false, error: 'Could not read document content' };
+    }
+
+    console.log(`[Overleaf CC] Successfully read content for ${currentDoc.name} (${content.length} chars)`);
+
+    return {
+      success: true,
+      data: {
+        content,
+        path: currentDoc.path || `/${currentDoc.name}`
+      }
+    };
+  } catch (error) {
+    console.error('[Overleaf CC] Error getting file content:', error);
+    return { success: false, error: (error as Error).message };
+  }
+}
+
+/**
+ * Get current document content from editor
+ */
+function getCurrentDocumentContent(): string | null {
+  const windowWithEditor = window as any;
+
+  // Try different ways to access editor content
+  if (windowWithEditor.editor?.getDocValue) {
+    try {
+      return windowWithEditor.editor.getDocValue();
+    } catch (err) {
+      console.error('[Overleaf CC] Error using editor.getDocValue:', err);
+    }
+  }
+
+  if (windowWithEditor.editor?.getValue) {
+    try {
+      return windowWithEditor.editor.getValue();
+    } catch (err) {
+      console.error('[Overleaf CC] Error using editor.getValue:', err);
+    }
+  }
+
+  // Try CodeMirror
+  const codeMirrorElement = document.querySelector('.CodeMirror');
+  if (codeMirrorElement && (window as any).CodeMirror) {
+    try {
+      const cm = (window as any).CodeMirror.fromTextArea(codeMirrorElement);
+      if (cm.getValue) {
+        return cm.getValue();
+      }
+    } catch (err) {
+      console.error('[Overleaf CC] Error using CodeMirror:', err);
+    }
+  }
+
+  console.error('[Overleaf CC] Could not extract document content');
+  return null;
+}
+
+/**
+ * Set file content in Overleaf editor
+ */
+async function handleSetFileContent(path: string | undefined, content: string): Promise<{ success: boolean; data?: any; error?: string }> {
+  try {
+    const windowWithEditor = window as any;
+    let success = false;
+
+    if (windowWithEditor.editor?.setDocValue) {
+      try {
+        windowWithEditor.editor.setDocValue(content);
+        success = true;
+      } catch (err) {
+        console.error('[Overleaf CC] Error using editor.setDocValue:', err);
+      }
+    }
+
+    if (!success && windowWithEditor.editor?.setValue) {
+      try {
+        windowWithEditor.editor.setValue(content);
+        success = true;
+      } catch (err) {
+        console.error('[Overleaf CC] Error using editor.setValue:', err);
+      }
+    }
+
+    if (!success) {
+      return { success: false, error: 'Could not set document content' };
+    }
+
+    return {
+      success: true,
+      data: { path: path || '/main.tex' }
+    };
+  } catch (error) {
+    console.error('[Overleaf CC] Error setting file content:', error);
+    return { success: false, error: (error as Error).message };
   }
 }
 
@@ -295,10 +879,12 @@ function createBridgeClient() {
       return new Promise((resolve, reject) => {
         // Store pending promise
         pendingRequests.set(requestId, { resolve, reject });
+        console.log('[Overleaf CC] Stored pending request:', requestId, 'Total pending:', pendingRequests.size);
 
         // Set up timeout
         setTimeout(() => {
           if (pendingRequests.has(requestId)) {
+            console.warn('[Overleaf CC] Request timeout:', requestId);
             pendingRequests.delete(requestId);
             reject(new Error('Bridge request timeout'));
           }
@@ -310,6 +896,7 @@ function createBridgeClient() {
           requestId
         };
 
+        console.log('[Overleaf CC] Sending message to bridge:', JSON.stringify(messageWithId));
         bridgeWs.send(JSON.stringify(messageWithId));
       });
     }
@@ -523,14 +1110,81 @@ function init(): void {
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => {
       setTimeout(injectButton, 1000);
+      setTimeout(setupFileTreeWatcher, 2000);
     });
   } else {
     setTimeout(injectButton, 1000);
+    setTimeout(setupFileTreeWatcher, 2000);
   }
 
   // Also try after a longer delay
   setTimeout(injectButton, 3000);
   setTimeout(injectButton, 5000);
+}
+
+/**
+ * Set up file tree watcher to detect file changes
+ */
+function setupFileTreeWatcher(): void {
+  console.log('[Overleaf CC] Setting up file tree watcher...');
+
+  // Try to find the file tree container
+  const fileTreeSelectors = [
+    '#ide-redesign-file-tree',
+    '.file-tree-inner',
+    '[data-test-selector="file-tree"]'
+  ];
+
+  for (const selector of fileTreeSelectors) {
+    const fileTree = document.querySelector(selector);
+    if (fileTree) {
+      console.log(`[Overleaf CC] Found file tree with selector: ${selector}`);
+
+      // Set up MutationObserver
+      const observer = new MutationObserver((mutations) => {
+        // Check if any mutations affected the file list
+        const hasFileChanges = mutations.some(mutation => {
+          // Check if added/removed nodes contain file items
+          const affectedNodes = [...(mutation.addedNodes || []), ...(mutation.removedNodes || [])];
+
+          return affectedNodes.some(node => {
+            if (node instanceof HTMLElement) {
+              return node.matches('[data-file-id]') ||
+                     node.matches('li') ||
+                     node.querySelector('[data-file-id]');
+            }
+            return false;
+          });
+        });
+
+        if (hasFileChanges) {
+          console.log('[Overleaf CC] File tree changed, triggering sync...');
+
+          // Debounce: wait for changes to settle
+          clearTimeout((window as any).fileTreeChangeTimeout);
+          (window as any).fileTreeChangeTimeout = setTimeout(() => {
+            if (syncManager && stateManager.getState().sync.mode === 'auto') {
+              console.log('[Overleaf CC] Triggering auto-sync after file tree change');
+              syncManager.syncFromOverleaf();
+            }
+          }, 1000);
+        }
+      });
+
+      // Start observing
+      observer.observe(fileTree, {
+        childList: true,
+        subtree: true
+      });
+
+      console.log('[Overleaf CC] File tree watcher active');
+      return;
+    }
+  }
+
+  console.log('[Overleaf CC] File tree not found, will retry later...');
+  // Retry after a delay
+  setTimeout(setupFileTreeWatcher, 5000);
 }
 
 init();

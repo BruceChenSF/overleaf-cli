@@ -33,7 +33,7 @@ export class SyncManagerDOM {
   /**
    * Send a message to the content script via the Chrome extension
    */
-  private async sendToContentScript(message: { type: string; payload?: unknown }): Promise<any> {
+  private async sendToContentScript(message: { type: string; payload?: unknown }, timeoutMs: number = 120000): Promise<any> {
     if (!this.extensionPort) {
       throw new Error('No extension connection available');
     }
@@ -47,11 +47,11 @@ export class SyncManagerDOM {
       const messageId = Math.random().toString(36).substring(7);
       console.log(`[SyncManagerDOM] Sending message ${messageId}:`, message.type);
 
-      // Set up timeout
+      // Set up timeout (default 120 seconds for large file syncs)
       const timeout = setTimeout(() => {
-        console.error(`[SyncManagerDOM] Message ${messageId} timeout after 10s`);
+        console.error(`[SyncManagerDOM] Message ${messageId} timeout after ${timeoutMs/1000}s`);
         reject(new Error('Extension message timeout'));
-      }, 10000);
+      }, timeoutMs);
 
       // Listen for response
       const messageHandler = (data: WebSocket.Data) => {
@@ -129,8 +129,9 @@ export class SyncManagerDOM {
 
   /**
    * Fetch content of a specific file
+   * Returns null if file is not currently open in editor
    */
-  async fetchFileContent(filePath: string): Promise<string> {
+  async fetchFileContent(filePath: string): Promise<string | null> {
     console.log(`[SyncManagerDOM] Fetching content for ${filePath}...`);
 
     try {
@@ -141,7 +142,12 @@ export class SyncManagerDOM {
 
       console.log(`[SyncManagerDOM] Got content, length: ${fileContent.content.length}`);
       return fileContent.content;
-    } catch (error) {
+    } catch (error: any) {
+      // Check if this is a "file not open" error
+      if (error.message && error.message.includes('FILE_NOT_OPEN')) {
+        console.log(`[SyncManagerDOM] File ${filePath} is not open in editor, skipping`);
+        return null;
+      }
       console.error(`[SyncManagerDOM] Error fetching file content for ${filePath}:`, error);
       throw error;
     }
@@ -168,56 +174,50 @@ export class SyncManagerDOM {
 
   /**
    * Perform initial sync - download all files from Overleaf to local directory
+   * Uses Overleaf WebSocket API via extension to fetch all file contents
    */
   async initialSync(): Promise<void> {
     console.log('[SyncManagerDOM] Starting initial sync...');
 
     try {
-      // Fetch all files
-      const files = await this.fetchAllFiles();
-      console.log(`[SyncManagerDOM] Found ${files?.length || 0} files`);
+      // Fetch all files via extension's WebSocket client
+      const files = await this.sendToContentScript({
+        type: 'SYNC_ALL_FILES'
+      });
 
-      if (!files || files.length === 0) {
-        console.warn('[SyncManagerDOM] No files found in project, will try to sync current document only');
-        // Try to get current document content even if file list is empty
+      if (!files || !Array.isArray(files) || files.length === 0) {
+        console.warn('[SyncManagerDOM] No files received from extension');
+        return;
+      }
+
+      console.log(`[SyncManagerDOM] Received ${files.length} files from extension`);
+
+      // Write each file to local filesystem
+      let syncedCount = 0;
+      for (const file of files) {
         try {
-          const content = await this.fetchFileContent('/main.tex');
-          const localPath = path.join(this.projectDir, 'main.tex');
+          const localPath = path.join(this.projectDir, file.path || file.name);
           await fs.mkdir(path.dirname(localPath), { recursive: true });
-          await fs.writeFile(localPath, content, 'utf-8');
-          console.log(`[SyncManagerDOM] Synced current document to ${localPath}`);
+
+          // Check if file is base64 encoded (binary file)
+          if (file.encoding === 'base64') {
+            // Decode base64 and write as binary
+            const buffer = Buffer.from(file.content, 'base64');
+            await fs.writeFile(localPath, buffer);
+            console.log(`[SyncManagerDOM] ✓ Synced ${file.name} to ${localPath} (${buffer.length} bytes, binary)`);
+          } else {
+            // Write as text
+            await fs.writeFile(localPath, file.content, 'utf-8');
+            console.log(`[SyncManagerDOM] ✓ Synced ${file.name} to ${localPath}`);
+          }
+
+          syncedCount++;
         } catch (err) {
-          console.error('[SyncManagerDOM] Could not sync current document:', err);
+          console.error(`[SyncManagerDOM] ✗ Failed to sync ${file.name}:`, err);
         }
-        console.log('[SyncManagerDOM] Initial sync complete (no files found)');
-        return;
       }
 
-      // Filter to only get document files (not folders)
-      const docFiles = files.filter(f => f.type === 'doc' || f.name.endsWith('.tex') || f.name.endsWith('.bib') || f.name.endsWith('.cls') || f.name.endsWith('.sty'));
-
-      if (docFiles.length === 0) {
-        console.warn('[SyncManagerDOM] No document files found (only folders?)');
-        return;
-      }
-
-      console.log(`[SyncManagerDOM] Found ${docFiles.length} document files`);
-
-      // Try to find main.tex first, otherwise use the first .tex file, otherwise first doc file
-      const mainFile = docFiles.find(f => f.name === 'main.tex') ||
-                       docFiles.find(f => f.name.endsWith('.tex')) ||
-                       docFiles[0];
-
-      console.log(`[SyncManagerDOM] Syncing main file: ${mainFile.name}`);
-
-      const content = await this.fetchFileContent(mainFile.path);
-
-      // Write to local file system
-      const localPath = path.join(this.projectDir, mainFile.name);
-      await fs.mkdir(path.dirname(localPath), { recursive: true });
-      await fs.writeFile(localPath, content, 'utf-8');
-
-      console.log(`[SyncManagerDOM] Synced ${mainFile.name} to ${localPath}`);
+      console.log(`[SyncManagerDOM] Successfully synced ${syncedCount}/${files.length} files`);
       console.log('[SyncManagerDOM] Initial sync complete!');
     } catch (error) {
       console.error('[SyncManagerDOM] Error during initial sync:', error);

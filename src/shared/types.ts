@@ -1,5 +1,5 @@
 // Message types for extension communication
-export type ExtensionMessage = OpenTerminalMessage | TerminalReadyMessage;
+export type ExtensionMessage = OpenTerminalMessage | TerminalReadyMessage | GetCookiesMessage;
 
 export interface OpenTerminalMessage {
   type: 'OPEN_TERMINAL';
@@ -11,6 +11,16 @@ export interface OpenTerminalMessage {
 export interface TerminalReadyMessage {
   type: 'TERMINAL_READY';
   windowId: number;
+}
+
+export interface GetCookiesMessage {
+  type: 'GET_COOKIES';
+  domain: string;
+}
+
+export interface CookiesResponse {
+  overleaf_session2?: string;
+  GCLB?: string;
 }
 
 /**
