@@ -1233,6 +1233,43 @@ function init(): void {
 function setupFileTreeWatcher(): void {
   console.log('[Overleaf CC] Setting up file tree watcher...');
 
+  // Track last known file count to detect actual changes
+  let lastFileCount = -1;
+  let lastFileList: string[] = [];
+
+  // Helper function to count files and get their paths
+  const getFileList = (): string[] => {
+    const fileElements = document.querySelectorAll('[data-file-id]');
+    return Array.from(fileElements).map(el => {
+      const nameEl = el.querySelector('.name');
+      return nameEl?.textContent || '';
+    }).filter(Boolean);
+  };
+
+  // Helper function to check if file list actually changed
+  const hasFileListChanged = (): boolean => {
+    const currentFiles = getFileList();
+    const currentCount = currentFiles.length;
+
+    // Check if count changed
+    if (currentCount !== lastFileCount) {
+      lastFileCount = currentCount;
+      lastFileList = currentFiles;
+      return true;
+    }
+
+    // Check if file names changed (detect renames, additions, deletions)
+    const filesChanged = currentFiles.length !== lastFileList.length ||
+                        currentFiles.some(f => !lastFileList.includes(f));
+
+    if (filesChanged) {
+      lastFileList = currentFiles;
+      return true;
+    }
+
+    return false;
+  };
+
   // Try to find the file tree container
   const fileTreeSelectors = [
     '#ide-redesign-file-tree',
@@ -1247,30 +1284,51 @@ function setupFileTreeWatcher(): void {
 
       // Set up MutationObserver
       const observer = new MutationObserver((mutations) => {
-        // Check if any mutations affected the file list
-        const hasFileChanges = mutations.some(mutation => {
-          // Check if added/removed nodes contain file items
-          const affectedNodes = [...(mutation.addedNodes || []), ...(mutation.removedNodes || [])];
-
-          return affectedNodes.some(node => {
-            if (node instanceof HTMLElement) {
-              return node.matches('[data-file-id]') ||
-                     node.matches('li') ||
-                     node.querySelector('[data-file-id]');
-            }
+        // Filter mutations to only relevant ones
+        const hasRelevantChanges = mutations.some(mutation => {
+          // Skip class changes on existing elements (usually folder expand/collapse)
+          if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
             return false;
-          });
+          }
+
+          // Skip style changes (usually animation-related)
+          if (mutation.type === 'attributes' && mutation.attributeName === 'style') {
+            return false;
+          }
+
+          // Only check for added/removed nodes
+          if (mutation.type === 'childList') {
+            const affectedNodes = [...(mutation.addedNodes || []), ...(mutation.removedNodes || [])];
+
+            return affectedNodes.some(node => {
+              if (node instanceof HTMLElement) {
+                // Only care about file items, not folder containers
+                return node.matches('[data-file-id]') ||
+                       node.querySelector('[data-file-id]');
+              }
+              return false;
+            });
+          }
+
+          return false;
         });
 
-        if (hasFileChanges) {
-          console.log('[Overleaf CC] File tree changed, triggering sync...');
+        if (hasRelevantChanges) {
+          console.log('[Overleaf CC] File tree mutation detected, checking if files actually changed...');
 
           // Debounce: wait for changes to settle
           clearTimeout((window as any).fileTreeChangeTimeout);
           (window as any).fileTreeChangeTimeout = setTimeout(() => {
-            if (syncManager && stateManager.getState().sync.mode === 'auto') {
-              console.log('[Overleaf CC] Triggering auto-sync after file tree change');
-              syncManager.syncFromOverleaf();
+            // Verify actual file list changed (not just folder expansion)
+            if (hasFileListChanged()) {
+              console.log('[Overleaf CC] File list actually changed, triggering sync...');
+
+              if (syncManager && stateManager.getState().sync.mode === 'auto') {
+                console.log('[Overleaf CC] Triggering auto-sync after file tree change');
+                syncManager.syncFromOverleaf();
+              }
+            } else {
+              console.log('[Overleaf CC] File list unchanged (likely folder expand/collapse), skipping sync');
             }
           }, 1000);
         }
@@ -1281,6 +1339,11 @@ function setupFileTreeWatcher(): void {
         childList: true,
         subtree: true
       });
+
+      // Initialize file count
+      lastFileCount = getFileList().length;
+      lastFileList = getFileList();
+      console.log(`[Overleaf CC] Initial file count: ${lastFileCount}`);
 
       console.log('[Overleaf CC] File tree watcher active');
       return;
@@ -1368,7 +1431,15 @@ async function startOverleafWatcher(): Promise<void> {
             content
           }
         }));
-        console.log(`✓ [Overleaf CC] Notified bridge of change: ${change.path}`);
+
+        // More specific log message based on change type
+        const actionMap = {
+          'created': 'Synced file creation to bridge',
+          'modified': 'Synced editor change to bridge',
+          'deleted': 'Synced file deletion to bridge'
+        };
+        const action = actionMap[change.type] || 'Synced change to bridge';
+        console.log(`✓ [Overleaf CC] ${action}: ${change.path}`);
       } else {
         console.warn('⚠️  [Overleaf CC] Bridge not connected, cannot notify of change');
       }
@@ -1387,11 +1458,11 @@ async function startOverleafWatcher(): Promise<void> {
 
 /**
  * Watch for changes in the Overleaf editor
- * This detects when the user types in the editor using MutationObserver
+ * This detects when the user types in the editor by listening to edit events
  */
 let editorChangeTimeout: NodeJS.Timeout | undefined;
 let editorWatcherAttempts = 0;
-let editorObserver: MutationObserver | undefined;
+let lastSyncedContent: string | undefined; // Track last synced content to avoid duplicate syncs
 
 function startEditorWatcher(): void {
   editorWatcherAttempts++;
@@ -1403,31 +1474,17 @@ function startEditorWatcher(): void {
   }
 
   // Try to find the CodeMirror editor container
-  const editorContainer = document.querySelector('#ide-redesign-panel-source-editor .cm-content');
+  const editorContainer = document.querySelector('#ide-redesign-panel-source-editor');
 
   if (editorContainer) {
-    console.log('[Overleaf CC] Found CodeMirror editor container, setting up observer...');
+    console.log('[Overleaf CC] Found CodeMirror editor container, setting up event listeners...');
 
-    // Clean up existing observer
-    if (editorObserver) {
-      editorObserver.disconnect();
-    }
+    // Listen for actual edit events (typing, paste, etc.)
+    const editEvents = ['input', 'keydown', 'paste', 'cut', 'drop'];
 
-    // Use MutationObserver to watch for content changes
-    editorObserver = new MutationObserver((mutations) => {
-      console.log(`🔍 [Overleaf CC] MutationObserver triggered: ${mutations.length} mutations`);
-
-      // Check if any text nodes changed
-      let hasContentChange = false;
-      for (const mutation of mutations) {
-        console.log(`🔍 [Overleaf CC] Mutation type: ${mutation.type}, target:`, mutation.target);
-        if (mutation.type === 'childList' || mutation.type === 'characterData') {
-          hasContentChange = true;
-        }
-      }
-
-      if (hasContentChange) {
-        console.log(`✓ [Overleaf CC] Content change detected, scheduling sync...`);
+    editEvents.forEach(eventType => {
+      editorContainer.addEventListener(eventType, () => {
+        console.log(`🔍 [Overleaf CC] Edit event detected: ${eventType}`);
 
         // Debounce changes - only notify after user stops typing for 1 second
         if (editorChangeTimeout) {
@@ -1448,7 +1505,14 @@ function startEditorWatcher(): void {
             console.log(`🔍 [Overleaf CC] Fetched content length: ${content?.length || 0}`);
             console.log(`🔍 [Overleaf CC] Bridge WS state: ${bridgeWs?.readyState}`);
 
-            if (content && bridgeWs && bridgeWs.readyState === WebSocket.OPEN) {
+            // Check if content actually changed (avoid duplicate syncs)
+            if (content === lastSyncedContent) {
+              console.log(`⏭️  [Overleaf CC] Content unchanged, skipping sync`);
+              return;
+            }
+
+            // Check if content is not null/undefined (empty string is valid for new files)
+            if (content !== null && content !== undefined && bridgeWs && bridgeWs.readyState === WebSocket.OPEN) {
               bridgeWs.send(JSON.stringify({
                 type: 'FILE_CHANGED',
                 data: {
@@ -1459,26 +1523,18 @@ function startEditorWatcher(): void {
                 }
               }));
               console.log(`✓ [Overleaf CC] Synced editor change to bridge: ${currentDoc.path}`);
+              lastSyncedContent = content;
             } else {
-              console.warn(`⚠️  [Overleaf CC] Cannot sync - content: ${!!content}, bridge: ${!!bridgeWs}, readyState: ${bridgeWs?.readyState}`);
+              console.warn(`⚠️  [Overleaf CC] Cannot sync - content: ${content !== null && content !== undefined}, bridge: ${!!bridgeWs}, readyState: ${bridgeWs?.readyState}`);
             }
           } else {
             console.warn(`⚠️  [Overleaf CC] No current document info`);
           }
         }, 1000);
-      } else {
-        console.log(`⚠️  [Overleaf CC] Mutation detected but no content change`);
-      }
+      }, { capture: true }); // Use capture phase to catch events before they're handled
     });
 
-    // Configure observer to watch for text changes
-    editorObserver.observe(editorContainer, {
-      childList: true,       // Watch for child node changes
-      subtree: true,         // Watch all descendants
-      characterData: true,   // Watch for text content changes
-    });
-
-    console.log('✅ [Overleaf CC] Editor watcher active (MutationObserver)');
+    console.log('✅ [Overleaf CC] Editor watcher active (event listeners)');
   } else {
     console.warn(`⚠️  [Overleaf CC] Editor container not found (attempt ${editorWatcherAttempts}/10), will retry...`);
     // Retry after delay
