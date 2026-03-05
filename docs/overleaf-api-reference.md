@@ -142,16 +142,272 @@ GET /Project/:Project_id/doc/:Doc_id/download
 - **Note:** "download" suffix to avoid conflict with private API route
 - **Controller File:** `services/web/app/src/Features/DocumentUpdater/DocumentUpdaterController.mjs`
 
-#### Set Document Content (Private API)
+## Document Update API
+
+### Set Document Content (Private API)
 ```
 POST /project/:Project_id/doc/:doc_id
 ```
 - **Router:** `privateApiRouter`
 - **Controller:** `DocumentController.setDocument`
 - **Auth:** `requirePrivateApiAuth()`
-- **Body:** `{ lines, version, ranges, lastUpdatedAt, lastUpdatedBy }`
-- **Purpose:** Update document content
+- **Purpose:** Update document content using Operational Transformation (OT)
 - **Controller File:** `Features/Documents/DocumentController.mjs`
+
+#### Request Format
+
+**URL Parameters:**
+- `:Project_id` - Project identifier
+- `:doc_id` - Document identifier
+
+**Headers:**
+- `Content-Type: application/json`
+- `Authorization: Bearer <service-token>`
+
+**Request Body:**
+```json
+{
+  "lines": ["\\documentclass{article}", "\\begin{document}", "Content here", "\\end{document}"],
+  "version": 123,
+  "ranges": {
+    "comments": [
+      {
+        "id": "comment_123",
+        "op": "insert",
+        "p": 5,
+        "length": 10,
+        "attributes": {
+          "comment": {
+            "id": "comment_123",
+            "userId": "user_456",
+            "userName": "John Doe",
+            "timestamp": "2026-03-06T10:30:00.000Z",
+            "resolved": false,
+            "text": "This needs clarification"
+          }
+        }
+      }
+    ],
+    "trackedChanges": [
+      {
+        "id": "tc_456",
+        "op": "insert",
+        "p": 15,
+        "length": 8,
+        "attributes": {
+          "tracked": {
+            "id": "tc_456",
+            "userId": "user_789",
+            "userName": "Jane Smith",
+            "timestamp": "2026-03-06T11:00:00.000Z",
+            "type": "insert"
+          }
+        }
+      }
+    ]
+  },
+  "lastUpdatedAt": "2026-03-06T10:30:00.000Z",
+  "lastUpdatedBy": "user_456"
+}
+```
+
+**Required Fields:**
+- `lines` - Array of strings representing document lines (UTF-8)
+- `version` - Current document version number for optimistic locking
+
+**Optional Fields:**
+- `ranges` - Object containing comments and tracked changes
+- `lastUpdatedAt` - ISO timestamp of last update
+- `lastUpdatedBy` - User ID who last updated
+
+#### Response Format
+
+**Success Response (200 OK):**
+```json
+{
+  "doc_id": "doc_id_string",
+  "version": 124,
+  "lines": ["\\documentclass{article}", "\\begin{document}", "Updated content", "\\end{document}"],
+  "ranges": {
+    "comments": [...],
+    "trackedChanges": [...]
+  },
+  "pathname": "/main.tex",
+  "projectHistoryId": "history_id_string",
+  "projectHistoryType": "project-history",
+  "historyRangesSupport": true,
+  "otMigrationStage": 2,
+  "resolvedCommentIds": ["comment_123"]
+}
+```
+
+**Error Response (400 Bad Request):**
+```json
+{
+  "error": "invalid_version",
+  "message": "Version mismatch: provided 123, current 125"
+}
+```
+
+**Error Response (404 Not Found):**
+```json
+{
+  "error": "not_found",
+  "message": "Document not found"
+}
+```
+
+**Error Response (403 Forbidden):**
+```json
+{
+  "error": "permission_denied",
+  "message": "User lacks write permission"
+}
+```
+
+#### Version Handling and Optimistic Locking
+
+**Critical Implementation Details:**
+
+1. **Version Increment:** Each successful update increments the document version by 1
+2. **Version Validation:** The `version` field in the request must match the current version
+3. **Conflict Resolution:** If version doesn't match, request fails with `invalid_version` error
+4. **Non-atomic Operations:** The entire document content is replaced, not merged
+
+**Version Flow Example:**
+```javascript
+// Current state: version = 100
+// Request: { lines: ["new content"], version: 100 }
+// Response: { doc_id: "123", version: 101, lines: ["new content"] }
+// Next request must use version: 101
+```
+
+**Peek vs Update Operations:**
+- Use `GET /project/:Project_id/doc/:doc_id?peek=true` to read without incrementing version
+- Always get current version before updating to avoid conflicts
+
+#### Operational Transformation (OT) Integration
+
+**Range Operations:**
+- `ranges.comments` - Comment annotations with insert/update/delete operations
+- `ranges.trackedChanges` - Track changes with user attribution
+- Each range operation has `op`, `p` (position), `length`, and `attributes`
+
+**Range Operation Types:**
+- `insert` - Insert new content/range at position
+- `retain` - Preserve content (no change)
+- `delete` - Remove content at position
+
+**Migration Stages:**
+- `otMigrationStage: 0` - Legacy system
+- `otMigrationStage: 1` - Partial migration
+- `otMigrationStage: 2` - Full OT migration (current)
+
+#### Usage Examples
+
+**Basic Content Update:**
+```javascript
+const response = await fetch('/api/project/project_123/doc/doc_456', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'Authorization': 'Bearer service-token'
+  },
+  body: JSON.stringify({
+    lines: ['\\documentclass{article}', '\\begin{document}', 'Content', '\\end{document}'],
+    version: 123
+  })
+});
+```
+
+**Update with Comment:**
+```javascript
+const response = await fetch('/api/project/project_123/doc/doc_456', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'Authorization': 'Bearer service-token'
+  },
+  body: JSON.stringify({
+    lines: ['Updated content with comment'],
+    version: 123,
+    ranges: {
+      comments: [{
+        id: 'comment_001',
+        op: 'insert',
+        p: 0,
+        length: 5,
+        attributes: {
+          comment: {
+            id: 'comment_001',
+            userId: 'user_001',
+            userName: 'Editor',
+            timestamp: new Date().toISOString(),
+            resolved: false,
+            text: 'Please review this change'
+          }
+        }
+      }]
+    }
+  })
+});
+```
+
+#### Error Handling
+
+**Common Error Scenarios:**
+
+1. **Version Mismatch (400):**
+   ```json
+   { "error": "invalid_version", "message": "Version conflict" }
+   ```
+
+2. **Document Not Found (404):**
+   ```json
+   { "error": "not_found", "message": "Document does not exist" }
+   ```
+
+3. **Permission Denied (403):**
+   ```json
+   { "error": "permission_denied", "message": "Insufficient permissions" }
+   ```
+
+4. **Invalid Request (400):**
+   ```json
+   { "error": "invalid_request", "message": "Missing required fields" }
+   ```
+
+5. **Service Unavailable (503):**
+   ```json
+   { "error": "service_unavailable", "message": "DocumentUpdater service unavailable" }
+   ```
+
+**Retry Strategy:**
+- On version mismatch: Re-read document and retry with correct version
+- On service unavailable: Implement exponential backoff retry
+- On permission denied: Check user access rights
+
+#### Implementation Notes
+
+**Controller Chain:**
+1. `DocumentController.setDocument()` (HTTP entry point)
+2. `ProjectEntityHandler.promises.updateDoc()` (Entity validation)
+3. `DocstoreManager.promises.updateDoc()` (Document storage via OT)
+4. `DocumentUpdater` service (Operational Transformation)
+
+**Rate Limiting:**
+- Default: 60 requests per 60 seconds per project
+- May vary based on project settings and user tier
+
+**Performance Considerations:**
+- Large documents (>10,000 lines) may have increased latency
+- Concurrent updates require careful version handling
+- Use `peek=true` for frequent reads without version increment
+
+**Security:**
+- Service-to-service authentication required
+- Project write permissions validated
+- Input sanitization for document content
 
 ---
 
