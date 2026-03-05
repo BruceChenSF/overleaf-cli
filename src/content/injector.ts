@@ -2,9 +2,11 @@ import type { OpenTerminalMessage } from '../shared/types';
 import { DropdownMenu } from './dropdown';
 import { stateManager } from './state-manager';
 import { injectNotificationStyles } from './styles';
+import { SyncManager } from './sync-manager';
 
-// Global dropdown instance
+// Global dropdown and sync manager instances
 let dropdown: DropdownMenu | null = null;
+let syncManager: SyncManager | null = null;
 
 function extractProjectId(): string | null {
   const match = window.location.href.match(/\/project\/([a-f0-9]+)/i);
@@ -125,6 +127,9 @@ function initDropdown(): void {
   // Inject dropdown styles
   injectDropdownStyles();
 
+  // Initialize sync manager
+  initSyncManager();
+
   console.log('[Overleaf CC] Dropdown initialized');
 }
 
@@ -146,9 +151,101 @@ async function injectDropdownStyles(): Promise<void> {
 /**
  * Manual sync callback
  */
-function manualSync(): void {
+async function manualSync(): Promise<void> {
   console.log('[Overleaf CC] Manual sync triggered');
-  // TODO: Will be connected to sync manager in Task 9
+
+  if (!syncManager) {
+    console.error('[Overleaf CC] Sync manager not initialized');
+    return;
+  }
+
+  try {
+    // Sync from Overleaf to get latest state
+    await syncManager.syncFromOverleaf();
+  } catch (error) {
+    console.error('[Overleaf CC] Manual sync failed:', error);
+  }
+}
+
+/**
+ * Create bridge client wrapper
+ */
+function createBridgeClient() {
+  return {
+    isConnected: () => {
+      // TODO: Check actual WebSocket connection status
+      // For now, return true if we're on an Overleaf project page
+      return !!extractProjectId();
+    },
+
+    sendMessage: async (message: any) => {
+      // Send message to background service worker which forwards to bridge
+      const response = await chrome.runtime.sendMessage({
+        type: 'BRIDGE_MESSAGE',
+        payload: message
+      });
+
+      if (response?.error) {
+        throw new Error(response.error);
+      }
+
+      return response;
+    }
+  };
+}
+
+/**
+ * Initialize sync manager
+ */
+function initSyncManager(): void {
+  const bridge = createBridgeClient();
+  syncManager = new SyncManager(bridge);
+
+  // Set up event listeners
+  syncManager.on('sync:started', () => {
+    console.log('[Overleaf CC] Sync started');
+  });
+
+  syncManager.on('sync:completed', (result: any) => {
+    console.log('[Overleaf CC] Sync completed:', result);
+    // Update dropdown
+    dropdown?.updateSyncStatus('synced');
+  });
+
+  syncManager.on('conflict:detected', (conflict: any) => {
+    console.warn('[Overleaf CC] Conflict detected:', conflict.path);
+    // Show notification
+    chrome.runtime.sendMessage({
+      type: 'SHOW_NOTIFICATION',
+      payload: {
+        type: 'warning',
+        title: 'Sync Conflict',
+        message: `Conflict detected in ${conflict.path}`
+      }
+    });
+  });
+
+  syncManager.on('connection:changed', (status: string) => {
+    console.log('[Overleaf CC] Connection status:', status);
+    dropdown?.updateConnectionStatus(status as 'connected' | 'disconnected' | 'error');
+
+    // Start polling if connected and in auto mode
+    if (status === 'connected' && stateManager.getState().sync.mode === 'auto') {
+      syncManager?.startPolling();
+    }
+  });
+
+  syncManager.on('files:received', (files: any[]) => {
+    console.log('[Overleaf CC] Files received from bridge:', files.length);
+    // TODO: Update Overleaf editor with received files
+  });
+
+  // Start polling if in auto mode
+  if (stateManager.getState().sync.mode === 'auto') {
+    syncManager.startPolling();
+  }
+
+  console.log('[Overleaf CC] Sync manager initialized');
 }
 
 /**
@@ -187,7 +284,10 @@ function onSyncModeChange(mode: 'auto' | 'manual'): void {
     }
   });
 
-  // TODO: Will start/stop polling in Task 9
+  // Update sync manager mode
+  if (syncManager) {
+    syncManager.setMode(mode);
+  }
 }
 
 /**
@@ -284,6 +384,15 @@ function init(): void {
 
   // Inject notification styles
   injectNotificationStyles();
+
+  // Set up message listener for bridge messages
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.type === 'TASK_COMPLETE') {
+      console.log('[Overleaf CC] Received TASK_COMPLETE:', message);
+      syncManager?.handleTaskCompletion(message);
+    }
+    return true;
+  });
 
   // Wait for page to load
   if (document.readyState === 'loading') {
