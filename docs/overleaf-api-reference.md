@@ -39,45 +39,33 @@ GET /project/:Project_id/entities
 ```
 - **Controller:** `ProjectController.projectEntitiesJson`
 - **Auth:** `requireLogin()`, `ensureUserCanReadProject`
-- **Purpose:** Get all documents in a project (filtered from entities response)
-- **Note:** This uses the same endpoint as file tree but filters for document entities
+- **Purpose:** Get all documents and files in a project, then filter for documents only
+- **Note:** This endpoint returns the complete file/folder structure including both documents and files
 
-#### GET /project/:id/docs
-
-**Purpose:** Get all documents in a project
-
-**Request:**
-- Method: GET
-- URL: `/api/project/{project_id}/docs`
-- Auth: Session cookie required
-
-**Response:**
-```json
-{
-  "docs": [
-    {
-      "_id": "doc_id_string",
-      "name": "main.tex",
-      "folder": null or "folder_id",
-      "created": "2026-03-06T10:00:00.000Z",
-      "updated": "2026-03-06T12:00:00.000Z"
-    }
-  ]
-}
-```
-
-**Note:** The actual endpoint `/project/:Project_id/entities` returns both documents and files with a different format. For document listing only, filter the response:
+**Response Format:**
 ```json
 {
   "project_id": "project_id_string",
   "entities": [
     {
       "path": "/main.tex",
-      "type": "doc"
+      "type": "doc",
+      "name": "main.tex"
+    },
+    {
+      "path": "/section1.tex",
+      "type": "doc",
+      "name": "section1.tex"
     },
     {
       "path": "/images/figure1.png",
-      "type": "file"
+      "type": "file",
+      "name": "figure1.png"
+    },
+    {
+      "path": "/references.bib",
+      "type": "file",
+      "name": "references.bib"
     }
   ]
 }
@@ -86,7 +74,14 @@ GET /project/:Project_id/entities
 **To get documents only:**
 1. Call `/project/:Project_id/entities`
 2. Filter entities where `type === "doc"`
-3. Extract document information from the paths
+3. Extract document paths/names for processing
+
+**Example document filtering:**
+```javascript
+// Filter response to get only documents
+const documents = response.entities.filter(entity => entity.type === "doc");
+// Returns: [{ path: "/main.tex", name: "main.tex", type: "doc" }, ...]
+```
 - **Controller File:** `ProjectController.mjs` → `ProjectEntityHandler.getAllEntitiesFromProject()`
 
 #### Join Project (Editor Initialization)
