@@ -1,6 +1,7 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import WebSocket from 'ws';
+import chokidar from 'chokidar';
 
 interface FileInfo {
   id: string;
@@ -23,6 +24,7 @@ export class SyncManagerDOM {
   private projectDir: string;
   private overleafTabId?: number;
   private extensionPort?: WebSocket;
+  private fileWatcher?: chokidar.FSWatcher;
 
   constructor(projectId: string, projectDir: string, extensionPort?: WebSocket) {
     this.projectId = projectId;
@@ -227,11 +229,56 @@ export class SyncManagerDOM {
 
   /**
    * Start watching for local file changes
-   * For now, this is a placeholder - we'll implement this later
+   * When a file is modified locally, push the change to Overleaf
    */
   startWatching(): void {
-    console.log('[SyncManagerDOM] File watching not yet implemented');
-    // TODO: Implement file watching with chokidar or similar
+    console.log('[SyncManagerDOM] Starting local file watcher...');
+
+    // Watch the project directory for changes
+    this.fileWatcher = chokidar.watch(this.projectDir, {
+      ignored: /(^|[\/\\])\../, // ignore dotfiles
+      persistent: true,
+      ignoreInitial: true, // Don't trigger on initial scan
+      awaitWriteFinish: {
+        stabilityThreshold: 1000, // Wait 1 second after write before processing
+        pollInterval: 100
+      }
+    });
+
+    // Watch for file changes
+    this.fileWatcher.on('change', async (filePath) => {
+      await this.handleLocalFileChange(filePath, 'modified');
+    });
+
+    // Watch for new files
+    this.fileWatcher.on('add', async (filePath) => {
+      await this.handleLocalFileChange(filePath, 'created');
+    });
+
+    // Watch for deleted files
+    this.fileWatcher.on('unlink', async (filePath) => {
+      await this.handleLocalFileChange(filePath, 'deleted');
+    });
+
+    console.log(`✅ [SyncManagerDOM] Watching ${this.projectDir} for changes`);
+  }
+
+  /**
+   * Handle local file change and push to Overleaf
+   */
+  private async handleLocalFileChange(filePath: string, changeType: 'modified' | 'created' | 'deleted'): Promise<void> {
+    try {
+      // Get relative path from project directory
+      const relativePath = path.relative(this.projectDir, filePath);
+      console.log(`📝 [SyncManagerDOM] Local file ${changeType}: ${relativePath}`);
+
+      // For now, just log the change
+      // TODO: Implement push to Overleaf via extension
+      console.log(`💡 [SyncManagerDOM] Note: Local → Overleaf sync not yet implemented`);
+      console.log(`   This would require Overleaf API calls to update files`);
+    } catch (error) {
+      console.error(`❌ [SyncManagerDOM] Error handling local file change:`, error);
+    }
   }
 
   /**
@@ -239,6 +286,9 @@ export class SyncManagerDOM {
    */
   stop(): void {
     console.log('[SyncManagerDOM] Stopping sync manager');
-    // TODO: Clean up file watchers
+    if (this.fileWatcher) {
+      this.fileWatcher.close();
+      this.fileWatcher = undefined;
+    }
   }
 }

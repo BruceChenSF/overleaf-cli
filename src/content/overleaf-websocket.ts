@@ -50,12 +50,21 @@ interface DocInfo {
   hash?: string;
 }
 
+type ChangeEventHandler = (change: FileChange) => void;
+
+interface FileChange {
+  type: 'modified' | 'created' | 'deleted';
+  path: string;
+  docId?: string;
+}
+
 export class OverleafWebSocketClient {
   private ws: WebSocket | null = null;
   private messageSeq = 0;
   private pendingRequests = new Map<number, (response: any) => void>();
   private docIdToPath = new Map<string, DocInfo>(); // docId/fileId -> {id, path, name, type}
   private projectJoined = false;
+  private onChangeCallback?: ChangeEventHandler;
 
   /**
    * Connect to Overleaf WebSocket
@@ -95,9 +104,15 @@ export class OverleafWebSocketClient {
     return new Promise((resolve, reject) => {
       if (!this.ws) return reject(new Error('WebSocket not initialized'));
 
-      this.ws.onopen = () => {
+      this.ws.onopen = async () => {
         console.log('[Overleaf WS] ✓ Connected');
-        resolve();
+        try {
+          // Step 3: Send joinProject request
+          await this.sendJoinProject(projectId);
+          resolve();
+        } catch (error) {
+          reject(error);
+        }
       };
 
       this.ws.onerror = (error) => {
@@ -161,10 +176,38 @@ export class OverleafWebSocketClient {
    * Handle data messages from Overleaf
    */
   private handleDataMessage(message: any): void {
+    // Log all message names for debugging
+    if (message.name !== 'otUpdateApplied') {
+      console.log(`[Overleaf WS] Received message: ${message.name}`);
+    }
+
     if (message.name === 'joinProjectResponse') {
-      console.log('[Overleaf WS] Received joinProjectResponse');
-      this.processProjectStructure(message.args[0] as OverleafJoinProjectResponse);
+      console.log('[Overleaf WS] ✓ Received joinProjectResponse');
+      // Set flag immediately so waitForProjectJoin doesn't timeout
       this.projectJoined = true;
+      this.processProjectStructure(message.args[0] as OverleafJoinProjectResponse);
+    } else if (message.name === 'otUpdateApplied') {
+      // File was modified in Overleaf
+      console.log(`🔍 [Overleaf WS] otUpdateApplied received:`, message.args);
+      const arg0 = message.args[0] as { doc: string; v: number };
+      const docInfo = this.docIdToPath.get(arg0.doc);
+      console.log(`🔍 [Overleaf WS] Doc lookup result:`, docInfo);
+      console.log(`🔍 [Overleaf WS] Has callback:`, !!this.onChangeCallback);
+      if (docInfo && this.onChangeCallback) {
+        console.log(`📝 [Overleaf CC] File modified in Overleaf: ${docInfo.path}`);
+        this.onChangeCallback({
+          type: 'modified',
+          path: docInfo.path,
+          docId: arg0.doc
+        });
+      } else {
+        if (!docInfo) {
+          console.warn(`⚠️ [Overleaf WS] Unknown docId: ${arg0.doc}`);
+        }
+        if (!this.onChangeCallback) {
+          console.warn(`⚠️ [Overleaf WS] No onChangeCallback registered`);
+        }
+      }
     }
   }
 
@@ -238,21 +281,29 @@ export class OverleafWebSocketClient {
    * Wait for project to be joined
    */
   async waitForProjectJoin(): Promise<void> {
+    console.log('[Overleaf WS] waitForProjectJoin called, projectJoined:', this.projectJoined);
+
     if (this.projectJoined) {
+      console.log('[Overleaf WS] Already joined, returning immediately');
       return;
     }
 
     return new Promise((resolve) => {
+      let checks = 0;
       const checkInterval = setInterval(() => {
+        checks++;
         if (this.projectJoined) {
           clearInterval(checkInterval);
+          console.log(`[Overleaf WS] Project joined after ${checks} checks`);
           resolve();
         }
       }, 100);
 
       setTimeout(() => {
-        clearInterval(checkInterval);
-        console.error('[Overleaf WS] Timeout waiting for project join');
+        if (!this.projectJoined) {
+          clearInterval(checkInterval);
+          console.error(`[Overleaf WS] Timeout waiting for project join after ${checks} checks`);
+        }
       }, 10000);
     });
   }
@@ -340,6 +391,26 @@ export class OverleafWebSocketClient {
   }
 
   /**
+   * Send joinProject request
+   * Response will be received via handleDataMessage (joinProjectResponse event)
+   */
+  private sendJoinProject(projectId: string): void {
+    console.log('[Overleaf WS] Sending joinProject request...');
+
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      throw new Error('WebSocket not connected');
+    }
+
+    // Send joinProject message (no response expected via callback)
+    this.ws.send(`5:::${JSON.stringify({
+      name: 'joinProject',
+      args: [projectId]
+    })}`);
+
+    console.log('[Overleaf WS] ✓ joinProject sent, waiting for joinProjectResponse...');
+  }
+
+  /**
    * Send a request and wait for response
    */
   private sendRequest(message: { name: string; args: unknown[] }): Promise<any> {
@@ -368,6 +439,14 @@ export class OverleafWebSocketClient {
   }
 
   /**
+   * Register a callback for file change events
+   */
+  onChange(callback: ChangeEventHandler): void {
+    this.onChangeCallback = callback;
+    console.log('[Overleaf WS] Change detection enabled');
+  }
+
+  /**
    * Disconnect from WebSocket
    */
   disconnect(): void {
@@ -378,5 +457,6 @@ export class OverleafWebSocketClient {
     this.pendingRequests.clear();
     this.docIdToPath.clear();
     this.projectJoined = false;
+    this.onChangeCallback = undefined;
   }
 }

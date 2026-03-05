@@ -10,6 +10,7 @@ import { OverleafWebSocketClient } from './overleaf-websocket';
 let dropdown: DropdownMenu | null = null;
 let syncManager: SyncManager | null = null;
 let bridgeWs: WebSocket | null = null;
+let overleafWsClient: OverleafWebSocketClient | null = null;
 const BRIDGE_PORT = 3456;
 
 // Promise storage for pending requests
@@ -235,6 +236,11 @@ async function connectToBridge(): Promise<void> {
                 originalOnMessage(event);
               }
 
+              // Start Overleaf change watcher (non-blocking)
+              startOverleafWatcher().catch(err => {
+                console.error('[Overleaf CC] Failed to start watcher:', err);
+              });
+
               resolve();
             } else if (message.type === 'response' && !message.data?.success) {
               console.error('[Overleaf CC] Auth failed:', message.data?.error);
@@ -267,7 +273,7 @@ async function connectToBridge(): Promise<void> {
       bridgeWs.onmessage = (event) => {
         try {
           const message = JSON.parse(event.data);
-          console.log('[Overleaf CC] Received from bridge:', message.type);
+          // console.log('[Overleaf CC] Received from bridge:', message.type);
           handleBridgeMessage(message);
         } catch (error) {
           console.error('[Overleaf CC] Failed to parse bridge message:', error);
@@ -287,22 +293,22 @@ async function connectToBridge(): Promise<void> {
  * Handle message from bridge
  */
 function handleBridgeMessage(message: any): void {
-  // Log raw message for debugging
-  console.log('[Overleaf CC] Raw message from bridge:', JSON.stringify(message));
+  // Log raw message for debugging (commented out to reduce noise)
+  // console.log('[Overleaf CC] Raw message from bridge:', JSON.stringify(message));
 
   // Handle EXTENSION_MESSAGE - forward to file-reader
   if (message.type === 'EXTENSION_MESSAGE') {
-    console.log('[Overleaf CC] Received EXTENSION_MESSAGE, forwarding to file-reader');
+    // console.log('[Overleaf CC] Received EXTENSION_MESSAGE, forwarding to file-reader');
     handleExtensionMessage(message);
     return;
   }
 
   // Handle messages with requestId (including response type)
   if (message.requestId) {
-    console.log('[Overleaf CC] Handling message with requestId:', message.requestId, 'type:', message.type);
+    // console.log('[Overleaf CC] Handling message with requestId:', message.requestId, 'type:', message.type);
     const pending = pendingRequests.get(message.requestId);
     if (pending) {
-      console.log('[Overleaf CC] Found pending request for requestId:', message.requestId);
+      // console.log('[Overleaf CC] Found pending request for requestId:', message.requestId);
       pendingRequests.delete(message.requestId);
 
       // For response type, check for errors
@@ -726,6 +732,7 @@ function parseFileTreeDOM(): any[] {
  * Get current document info
  */
 function getCurrentDocumentInfo(): { id?: string; name?: string; path?: string } | null {
+  // Try to get doc info from URL first
   const match = window.location.pathname.match(/\/project\/[^/]+\/(?:doc|folder)\/([^/]+)/);
   if (match) {
     const docId = match[1];
@@ -738,6 +745,87 @@ function getCurrentDocumentInfo(): { id?: string; name?: string; path?: string }
       path: `/${docName}`
     };
   }
+
+  // Try to get filename from breadcrumbs (most reliable method)
+  const breadcrumbsContainer = document.querySelector('#ol-cm-toolbar-wrapper > div.ol-cm-breadcrumbs');
+  if (breadcrumbsContainer) {
+    const breadcrumbItems = breadcrumbsContainer.querySelectorAll('div');
+    const pathParts: string[] = [];
+
+    // Collect all div text content (folders and filename)
+    for (const item of breadcrumbItems) {
+      const text = item.textContent?.trim();
+      if (text) {
+        pathParts.push(text);
+      }
+    }
+
+    if (pathParts.length > 0) {
+      // Last item is the filename, preceding items are folders
+      const fileName = pathParts[pathParts.length - 1];
+      const filePath = pathParts.join('/');
+
+      console.log(`🔍 [Overleaf CC] Extracted from breadcrumbs - fileName: ${fileName}, path: ${filePath}`);
+
+      return {
+        id: undefined,
+        name: fileName,
+        path: `/${filePath}`
+      };
+    }
+  }
+
+  // Try to use Overleaf WebSocket client to get the real filename
+  if (overleafWsClient) {
+    // Try to find the currently open file by checking which doc is being edited
+    // We can use the editor content to match against files
+    const allDocs = overleafWsClient.getAllDocIds();
+
+    // Get current content from editor
+    const currentContent = getCurrentDocumentContent();
+
+    if (currentContent) {
+      // Try to match content with one of the docs
+      // For now, just get the first doc (this is a simplification)
+      // TODO: Find a better way to determine which file is currently open
+      const firstDocId = allDocs[0];
+      if (firstDocId) {
+        const docInfo = overleafWsClient.getDocInfo(firstDocId);
+        if (docInfo) {
+          console.log(`🔍 [Overleaf CC] Using Overleaf WS client - name: ${docInfo.name}, path: ${docInfo.path}`);
+          return {
+            id: docInfo.id,
+            name: docInfo.name,
+            path: docInfo.path
+          };
+        }
+      }
+    }
+  }
+
+  // Fallback: try to get doc info from DOM
+  // Check if we can find the document name in the editor
+  const docTitleElement = document.querySelector('.document-title') as HTMLElement;
+  const docName = docTitleElement?.textContent ||
+                  document.querySelector('.name')?.textContent ||
+                  document.title.split(' - ')[0];
+
+  if (docName) {
+    // Try to find docId from data attributes or other sources
+    const editorPanel = document.querySelector('#ide-redesign-panel-source-editor');
+    const docId = editorPanel?.getAttribute('data-doc-id') ||
+                  undefined;
+
+    console.log(`🔍 [Overleaf CC] Using fallback document detection - name: ${docName}, id: ${docId || 'not found'}`);
+
+    return {
+      id: docId,
+      name: docName,
+      path: `/${docName}`
+    };
+  }
+
+  console.warn('⚠️  [Overleaf CC] Cannot determine current document');
   return null;
 }
 
@@ -803,7 +891,7 @@ function getCurrentDocumentContent(): string | null {
     }
   }
 
-  // Try CodeMirror
+  // Try CodeMirror (old version)
   const codeMirrorElement = document.querySelector('.CodeMirror');
   if (codeMirrorElement && (window as any).CodeMirror) {
     try {
@@ -813,6 +901,23 @@ function getCurrentDocumentContent(): string | null {
       }
     } catch (err) {
       console.error('[Overleaf CC] Error using CodeMirror:', err);
+    }
+  }
+
+  // Try CodeMirror 6 (new Overleaf editor)
+  const cmContent = document.querySelector('#ide-redesign-panel-source-editor .cm-content');
+  if (cmContent) {
+    try {
+      // Extract text from all lines
+      const lines = cmContent.querySelectorAll('.cm-line');
+      const content = Array.from(lines)
+        .map(line => line.textContent || '')
+        .join('\n');
+
+      console.log(`🔍 [Overleaf CC] Extracted content from CodeMirror 6: ${content.length} chars, ${lines.length} lines`);
+      return content;
+    } catch (err) {
+      console.error('[Overleaf CC] Error using CodeMirror 6:', err);
     }
   }
 
@@ -879,7 +984,7 @@ function createBridgeClient() {
       return new Promise((resolve, reject) => {
         // Store pending promise
         pendingRequests.set(requestId, { resolve, reject });
-        console.log('[Overleaf CC] Stored pending request:', requestId, 'Total pending:', pendingRequests.size);
+        // console.log('[Overleaf CC] Stored pending request:', requestId, 'Total pending:', pendingRequests.size);
 
         // Set up timeout
         setTimeout(() => {
@@ -896,7 +1001,7 @@ function createBridgeClient() {
           requestId
         };
 
-        console.log('[Overleaf CC] Sending message to bridge:', JSON.stringify(messageWithId));
+        // console.log('[Overleaf CC] Sending message to bridge:', JSON.stringify(messageWithId));
         bridgeWs.send(JSON.stringify(messageWithId));
       });
     }
@@ -948,7 +1053,7 @@ async function initSyncManager(): Promise<void> {
   });
 
   syncManager.on('files:received', (files: any[]) => {
-    console.log('[Overleaf CC] Files received from bridge:', files.length);
+    // console.log('[Overleaf CC] Files received from bridge:', files.length);
     // TODO: Update Overleaf editor with received files
   });
 
@@ -1186,5 +1291,208 @@ function setupFileTreeWatcher(): void {
   // Retry after a delay
   setTimeout(setupFileTreeWatcher, 5000);
 }
+
+/**
+ * Start Overleaf WebSocket watcher for real-time change detection
+ */
+async function startOverleafWatcher(): Promise<void> {
+  console.log('🔍 [Overleaf CC] Starting Overleaf change watcher...');
+
+  try {
+    const projectId = extractProjectId();
+    const csrfToken = extractCSRFToken();
+
+    if (!projectId || !csrfToken) {
+      console.warn('⚠️  [Overleaf CC] Cannot start watcher: missing projectId or csrfToken');
+      return;
+    }
+
+    // Get cookies
+    const cookieResponse = await chrome.runtime.sendMessage({
+      type: 'GET_COOKIES',
+      domain: window.location.hostname
+    }) as { overleaf_session2?: string; GCLB?: string };
+
+    if (!cookieResponse.overleaf_session2) {
+      console.warn('⚠️  [Overleaf CC] Cannot start watcher: missing cookies');
+      return;
+    }
+
+    const auth = {
+      cookieOverleafSession2: cookieResponse.overleaf_session2,
+      cookieGCLB: cookieResponse.GCLB || '',
+    };
+
+    // Create WebSocket client
+    overleafWsClient = new OverleafWebSocketClient();
+    await overleafWsClient.connect(projectId, auth, csrfToken);
+    await overleafWsClient.waitForProjectJoin();
+
+    // Register change handler
+    overleafWsClient.onChange(async (change) => {
+      console.log(`📢 [Overleaf CC] Change detected: ${change.type} - ${change.path}`);
+
+      // For modified and created files, fetch content from Overleaf
+      let content: string | undefined;
+      if (change.type === 'modified' || change.type === 'created') {
+        if (change.docId) {
+          try {
+            const docInfo = overleafWsClient!.getDocInfo(change.docId);
+            if (docInfo && docInfo.type === 'doc') {
+              // Fetch document content via joinDoc
+              const lines = await overleafWsClient!.joinDoc(change.docId);
+              content = lines.join('\n');
+              await overleafWsClient!.leaveDoc(change.docId);
+              console.log(`✓ [Overleaf CC] Fetched content for ${change.path} (${content.length} chars)`);
+            } else if (docInfo && docInfo.type === 'file') {
+              // For binary files, we'd need to download and convert to base64
+              // For now, skip binary files in change detection
+              console.log(`⚠️  [Overleaf CC] Binary file change detected: ${change.path} (not supported yet)`);
+              return;
+            }
+          } catch (error) {
+            console.error(`❌ [Overleaf CC] Failed to fetch content for ${change.path}:`, error);
+            return;
+          }
+        }
+      }
+
+      // Send change notification to bridge
+      if (bridgeWs && bridgeWs.readyState === WebSocket.OPEN) {
+        bridgeWs.send(JSON.stringify({
+          type: 'FILE_CHANGED',
+          data: {
+            changeType: change.type,
+            path: change.path,
+            docId: change.docId,
+            content
+          }
+        }));
+        console.log(`✓ [Overleaf CC] Notified bridge of change: ${change.path}`);
+      } else {
+        console.warn('⚠️  [Overleaf CC] Bridge not connected, cannot notify of change');
+      }
+    });
+
+    console.log('✅ [Overleaf CC] Overleaf change watcher active');
+
+    // Also watch for local editor changes (when user types in Overleaf editor)
+    startEditorWatcher();
+  } catch (error) {
+    console.error('❌ [Overleaf CC] Failed to start Overleaf watcher:', error);
+    // Retry after delay
+    setTimeout(startOverleafWatcher, 10000);
+  }
+}
+
+/**
+ * Watch for changes in the Overleaf editor
+ * This detects when the user types in the editor using MutationObserver
+ */
+let editorChangeTimeout: NodeJS.Timeout | undefined;
+let editorWatcherAttempts = 0;
+let editorObserver: MutationObserver | undefined;
+
+function startEditorWatcher(): void {
+  editorWatcherAttempts++;
+
+  // Limit retries
+  if (editorWatcherAttempts > 10) {
+    console.warn('⚠️  [Overleaf CC] Editor watcher max retries reached, giving up');
+    return;
+  }
+
+  // Try to find the CodeMirror editor container
+  const editorContainer = document.querySelector('#ide-redesign-panel-source-editor .cm-content');
+
+  if (editorContainer) {
+    console.log('[Overleaf CC] Found CodeMirror editor container, setting up observer...');
+
+    // Clean up existing observer
+    if (editorObserver) {
+      editorObserver.disconnect();
+    }
+
+    // Use MutationObserver to watch for content changes
+    editorObserver = new MutationObserver((mutations) => {
+      console.log(`🔍 [Overleaf CC] MutationObserver triggered: ${mutations.length} mutations`);
+
+      // Check if any text nodes changed
+      let hasContentChange = false;
+      for (const mutation of mutations) {
+        console.log(`🔍 [Overleaf CC] Mutation type: ${mutation.type}, target:`, mutation.target);
+        if (mutation.type === 'childList' || mutation.type === 'characterData') {
+          hasContentChange = true;
+        }
+      }
+
+      if (hasContentChange) {
+        console.log(`✓ [Overleaf CC] Content change detected, scheduling sync...`);
+
+        // Debounce changes - only notify after user stops typing for 1 second
+        if (editorChangeTimeout) {
+          clearTimeout(editorChangeTimeout);
+        }
+
+        editorChangeTimeout = setTimeout(() => {
+          console.log(`🔍 [Overleaf CC] Debounce timeout fired, checking current document...`);
+
+          const currentDoc = getCurrentDocumentInfo();
+          console.log(`🔍 [Overleaf CC] Current doc info:`, currentDoc);
+
+          if (currentDoc) {
+            console.log(`📝 [Overleaf CC] Editor change detected: ${currentDoc.path}`);
+
+            // Fetch current content and send to bridge
+            const content = getCurrentDocumentContent();
+            console.log(`🔍 [Overleaf CC] Fetched content length: ${content?.length || 0}`);
+            console.log(`🔍 [Overleaf CC] Bridge WS state: ${bridgeWs?.readyState}`);
+
+            if (content && bridgeWs && bridgeWs.readyState === WebSocket.OPEN) {
+              bridgeWs.send(JSON.stringify({
+                type: 'FILE_CHANGED',
+                data: {
+                  changeType: 'modified',
+                  path: currentDoc.path,
+                  docId: currentDoc.id,
+                  content
+                }
+              }));
+              console.log(`✓ [Overleaf CC] Synced editor change to bridge: ${currentDoc.path}`);
+            } else {
+              console.warn(`⚠️  [Overleaf CC] Cannot sync - content: ${!!content}, bridge: ${!!bridgeWs}, readyState: ${bridgeWs?.readyState}`);
+            }
+          } else {
+            console.warn(`⚠️  [Overleaf CC] No current document info`);
+          }
+        }, 1000);
+      } else {
+        console.log(`⚠️  [Overleaf CC] Mutation detected but no content change`);
+      }
+    });
+
+    // Configure observer to watch for text changes
+    editorObserver.observe(editorContainer, {
+      childList: true,       // Watch for child node changes
+      subtree: true,         // Watch all descendants
+      characterData: true,   // Watch for text content changes
+    });
+
+    console.log('✅ [Overleaf CC] Editor watcher active (MutationObserver)');
+  } else {
+    console.warn(`⚠️  [Overleaf CC] Editor container not found (attempt ${editorWatcherAttempts}/10), will retry...`);
+    // Retry after delay
+    setTimeout(startEditorWatcher, 2000);
+  }
+}
+
+/**
+ * Handle file change from bridge (local modification)
+ */
+function handleLocalFileChange(data: { path: string; changeType: string }): void {
+  console.log(`📝 [Overleaf CC] Local file changed: ${data.changeType} - ${data.path}`);
+  console.log(`💡 [Overleaf CC] Note: Local → Overleaf sync not yet implemented`);
+}
+
 
 init();

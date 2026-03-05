@@ -43,13 +43,13 @@ export class BridgeServer {
   private async handleMessage(ws: WebSocket, message: BridgeMessage & { requestId?: string }): Promise<void> {
     const requestId = (message as any).requestId;
 
-    // Log incoming message for debugging
-    console.log('[Bridge] Received message:', JSON.stringify({ type: message.type, requestId }));
+    // Log incoming message for debugging (commented out to reduce noise)
+    // console.log('[Bridge] Received message:', JSON.stringify({ type: message.type, requestId }));
 
     // Helper function to send response with requestId
     const sendResponse = (data: any) => {
       const response = requestId ? { ...data, requestId } : data;
-      console.log('[Bridge] Sending response:', JSON.stringify(response));
+      // console.log('[Bridge] Sending response:', JSON.stringify(response));
       ws.send(JSON.stringify(response));
     };
 
@@ -72,9 +72,12 @@ export class BridgeServer {
       case 'GET_FILE_STATUS':
         await this.handleGetFileStatus(ws, message as any, sendResponse);
         break;
+      case 'FILE_CHANGED':
+        await this.handleFileChanged(ws, message as any, sendResponse);
+        break;
       case 'EXTENSION_MESSAGE':
         // Response from extension - handled by SyncManagerDOM
-        console.log('[Bridge] Received EXTENSION_MESSAGE, forwarding to SyncManagerDOM');
+        // console.log('[Bridge] Received EXTENSION_MESSAGE, forwarding to SyncManagerDOM');
         break;
       default:
         console.log('[Bridge] Unknown message type:', message.type);
@@ -323,6 +326,73 @@ export class BridgeServer {
       });
     } catch (error) {
       console.error('[Bridge] Error getting file status:', error);
+      sendResponse({
+        type: 'response',
+        data: { success: false, error: (error as Error).message }
+      });
+    }
+  }
+
+  private async handleFileChanged(ws: WebSocket, message: any, sendResponse: (data: any) => void): Promise<void> {
+    const client = this.clients.get(ws);
+
+    if (!client) {
+      console.warn('[Bridge] File changed but no client found');
+      return;
+    }
+
+    const { changeType, path: filePath, docId, content } = message.data;
+
+    console.log(`📝 [Bridge] File changed in Overleaf: ${changeType} - ${filePath}`);
+    console.log(`🔍 [Bridge] Project dir: ${this.workDir}`);
+    console.log(`🔍 [Bridge] Project ID: ${client.projectId}`);
+    console.log(`🔍 [Bridge] Content length: ${content?.length || 0}`);
+
+    try {
+      const fullPath = path.join(this.workDir, client.projectId, filePath);
+      console.log(`🔍 [Bridge] Full path: ${fullPath}`);
+      console.log(`🔍 [Bridge] Dirname: ${path.dirname(fullPath)}`);
+
+      if (changeType === 'modified') {
+        // Update local file with content from Overleaf
+        if (content !== undefined) {
+          await fs.mkdir(path.dirname(fullPath), { recursive: true });
+          console.log(`🔍 [Bridge] About to write ${content.length} bytes to ${fullPath}`);
+
+          await fs.writeFile(fullPath, content, 'utf-8');
+
+          // Verify write
+          const stats = await fs.stat(fullPath);
+          console.log(`✓ [Bridge] Updated local file: ${filePath} (${stats.size} bytes written)`);
+        } else {
+          console.warn(`⚠️ [Bridge] No content provided for ${filePath}, skipping update`);
+        }
+      } else if (changeType === 'created') {
+        // Create new local file with content from Overleaf
+        if (content !== undefined) {
+          await fs.mkdir(path.dirname(fullPath), { recursive: true });
+          console.log(`🔍 [Bridge] About to write ${content.length} bytes to ${fullPath}`);
+
+          await fs.writeFile(fullPath, content, 'utf-8');
+
+          // Verify write
+          const stats = await fs.stat(fullPath);
+          console.log(`✓ [Bridge] Created new local file: ${filePath} (${stats.size} bytes written)`);
+        } else {
+          console.warn(`⚠️ [Bridge] No content provided for ${filePath}, skipping creation`);
+        }
+      } else if (changeType === 'deleted') {
+        // Delete local file
+        await fs.unlink(fullPath);
+        console.log(`✓ [Bridge] Deleted local file: ${filePath}`);
+      }
+
+      sendResponse({
+        type: 'response',
+        data: { success: true, message: `Processed ${changeType} for ${filePath}` }
+      });
+    } catch (error) {
+      console.error(`❌ [Bridge] Error handling file change for ${filePath}:`, error);
       sendResponse({
         type: 'response',
         data: { success: false, error: (error as Error).message }
