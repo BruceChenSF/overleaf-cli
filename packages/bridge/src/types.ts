@@ -1,7 +1,7 @@
 export interface BridgeMessage {
   type: 'auth' | 'command' | 'response' | 'EXTENSION_MESSAGE' |
         'GET_ALL_FILES' | 'GET_FILE_CONTENT' | 'SET_FILE_CONTENT' | 'GET_FILE_STATUS' |
-        'FILE_CHANGED' | 'FILE_DELETED';
+        'FILE_CHANGED' | 'FILE_DELETED' | 'FILE_CREATED';
   data: unknown;
   messageId?: string;
   requestId?: string;

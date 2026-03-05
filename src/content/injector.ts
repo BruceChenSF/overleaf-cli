@@ -20,6 +20,84 @@ const pendingRequests = new Map<string, {
   reject: (error: any) => void;
 }>();
 
+/**
+ * Intercept fetch API to capture file create/delete operations
+ * This is more reliable than DOM observation or WebSocket messages
+ */
+function setupFetchInterceptor(): void {
+  const originalFetch = window.fetch;
+
+  window.fetch = function(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+
+    // Call original fetch
+    return originalFetch.call(this, input, init).then(async (response) => {
+      const projectId = extractProjectId();
+
+      // Intercept file creation: POST /project/{id}/doc
+      if (response.ok && response.url.includes('/project/') && response.url.includes('/doc') && init?.method === 'POST') {
+        try {
+          const data = await response.clone().json();
+          if (data._id && data.name) {
+            console.log(`🔍 [Overleaf CC] Fetch interceptor: File created via API - ${data.name} (id: ${data._id})`);
+
+            // Notify bridge about file creation
+            if (bridgeWs && bridgeWs.readyState === WebSocket.OPEN) {
+              bridgeWs.send(JSON.stringify({
+                type: 'FILE_CREATED',
+                data: {
+                  path: `/${data.name}`,
+                  docId: data._id,
+                  name: data.name
+                }
+              }));
+              console.log(`✓ [Overleaf CC] Notified bridge of file creation: ${data.name}`);
+            }
+          }
+        } catch (e) {
+          // Ignore JSON parse errors
+        }
+      }
+
+      // Intercept file deletion: DELETE /project/{id}/doc/{docId}
+      if (response.ok && init?.method === 'DELETE') {
+        const match = response.url.match(/\/project\/[^\/]+\/doc\/([a-f0-9]+)/i);
+        if (match) {
+          const docId = match[1];
+          console.log(`🔍 [Overleaf CC] Fetch interceptor: File deleted via API (id: ${docId})`);
+
+          // Get file info from OverleafWebSocketClient's docIdToPath mapping
+          const docInfo = overleafWsClient?.getDocInfo(docId);
+          const filePath = docInfo?.path || `/${docId}`;
+
+          console.log(`🗑️  [Overleaf CC] File deleted in Overleaf: ${filePath} (docId: ${docId})`);
+
+          // Notify bridge about file deletion
+          if (bridgeWs && bridgeWs.readyState === WebSocket.OPEN) {
+            bridgeWs.send(JSON.stringify({
+              type: 'FILE_DELETED',
+              data: {
+                path: filePath,
+                docId: docId
+              }
+            }));
+            console.log(`✓ [Overleaf CC] Notified bridge of file deletion: ${filePath}`);
+          }
+
+          // Remove from docIdToPath mapping
+          if (overleafWsClient && docId) {
+            (overleafWsClient as any).docIdToPath?.delete(docId);
+          }
+        }
+      }
+
+      return response;
+    });
+  };
+
+  console.log('[Overleaf CC] Fetch interceptor installed');
+}
+
 function extractProjectId(): string | null {
   const match = window.location.href.match(/\/project\/([a-f0-9]+)/i);
   return match ? match[1] : null;
@@ -1219,6 +1297,9 @@ function subscribeToStateChanges(): void {
 
 function injectButton(): void {
   console.log('[Overleaf CC] Attempting to inject button...');
+
+  // Install fetch interceptor to capture file create/delete operations
+  setupFetchInterceptor();
 
   // Find the menu bar using the exact selector
   const menuBar = document.querySelector('#ide-root > div.ide-redesign-main > nav > div.ide-redesign-toolbar-menu > div.ide-redesign-toolbar-menu-bar');

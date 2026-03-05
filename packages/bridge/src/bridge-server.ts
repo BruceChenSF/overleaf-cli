@@ -5,6 +5,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import type { BridgeMessage, AuthMessage, CommandMessage } from './types.js';
 import { handleFileDeleted } from './handlers/file-deleted-handler.js';
+import { handleFileCreated } from './handlers/file-created-handler.js';
 
 export class BridgeServer {
   private wss: WebSocketServer;
@@ -78,6 +79,9 @@ export class BridgeServer {
         break;
       case 'FILE_DELETED':
         await this.handleFileDeleted(ws, message as any, sendResponse);
+        break;
+      case 'FILE_CREATED':
+        await this.handleFileCreated(ws, message as any, sendResponse);
         break;
       case 'EXTENSION_MESSAGE':
         // Response from extension - handled by SyncManagerDOM
@@ -431,6 +435,40 @@ export class BridgeServer {
       console.log(`✓ [Bridge] File deleted: ${filePath}`);
     } catch (error) {
       console.error(`✗ [Bridge] Failed to delete ${filePath}:`, error);
+      sendResponse({
+        type: 'response',
+        data: { success: false, error: (error as Error).message }
+      });
+    }
+  }
+
+  private async handleFileCreated(ws: WebSocket, message: any, sendResponse: (data: any) => void): Promise<void> {
+    const client = this.clients.get(ws);
+
+    if (!client) {
+      console.warn('[Bridge] File created but no client found');
+      sendResponse({
+        type: 'response',
+        data: { success: false, error: 'Not authenticated' }
+      });
+      return;
+    }
+
+    const { path: filePath, docId, name } = message.data;
+    const projectDir = path.join(this.workDir, client.projectId);
+
+    console.log(`📝 [Bridge] File created in Overleaf: ${filePath}`);
+
+    try {
+      await handleFileCreated({ path: filePath, docId, name }, projectDir);
+
+      sendResponse({
+        type: 'FILE_CREATED_ACK',
+        payload: { path: filePath }
+      });
+      console.log(`✓ [Bridge] File created: ${filePath}`);
+    } catch (error) {
+      console.error(`✗ [Bridge] Failed to create ${filePath}:`, error);
       sendResponse({
         type: 'response',
         data: { success: false, error: (error as Error).message }
