@@ -5,6 +5,7 @@ import { injectNotificationStyles } from './styles';
 import { SyncManager } from './sync-manager';
 import type { ExtensionToBridgeMessage, BridgeToExtensionMessage } from '../shared/types';
 import { OverleafWebSocketClient } from './overleaf-websocket';
+import { syncStateTracker } from './sync-state';
 
 // Global dropdown and sync manager instances
 let dropdown: DropdownMenu | null = null;
@@ -27,6 +28,19 @@ function extractProjectId(): string | null {
 function extractCSRFToken(): string | null {
   const metaTag = document.querySelector('meta[name="ol-csrfToken"]') as HTMLMetaElement;
   return metaTag?.content || null;
+}
+
+/**
+ * Generate simple hash for content comparison
+ */
+function generateContentHash(content: string): string {
+  let hash = 0;
+  for (let i = 0; i < content.length; i++) {
+    const char = content.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash | 0;  // Convert to 32-bit signed integer
+  }
+  return hash.toString(36);
 }
 
 function createTerminalButton(): HTMLElement {
@@ -435,17 +449,16 @@ async function handleExtensionMessage(message: any): Promise<void> {
 }
 
 /**
- * Sync all files from Overleaf using WebSocket API
+ * Perform initial sync - fetch all files from Overleaf and send to bridge
+ * Uses incremental sync with hash validation to avoid re-downloading unchanged files
  */
 async function handleSyncAllFiles(): Promise<{ success: boolean; data?: any[]; error?: string }> {
-  console.log('[Overleaf CC] Starting full file sync via WebSocket...');
+  console.log('[Overleaf CC] Starting initial sync...');
+  console.log('[Overleaf CC] Fetching file list from Overleaf...');
 
   try {
     const projectId = extractProjectId();
     const csrfToken = extractCSRFToken();
-
-    console.log('[Overleaf CC] Project ID:', projectId);
-    console.log('[Overleaf CC] CSRF Token:', csrfToken ? 'Found' : 'Not found');
 
     if (!projectId || !csrfToken) {
       return { success: false, error: 'Missing projectId or csrfToken' };
@@ -458,11 +471,6 @@ async function handleSyncAllFiles(): Promise<{ success: boolean; data?: any[]; e
       domain: window.location.hostname
     }) as { overleaf_session2?: string; GCLB?: string };
 
-    console.log('[Overleaf CC] Received cookie response:', {
-      overleaf_session2: cookieResponse.overleaf_session2 ? `${cookieResponse.overleaf_session2.substring(0, 10)}...` : undefined,
-      GCLB: cookieResponse.GCLB
-    });
-
     if (!cookieResponse.overleaf_session2) {
       console.error('[Overleaf CC] No overleaf_session2 cookie received from service worker');
       return { success: false, error: 'Missing overleaf_session2 cookie' };
@@ -473,77 +481,148 @@ async function handleSyncAllFiles(): Promise<{ success: boolean; data?: any[]; e
       cookieGCLB: cookieResponse.GCLB || '',
     };
 
-    console.log('[Overleaf CC] Got cookies, connecting to Overleaf WebSocket...');
-
     // Connect to Overleaf WebSocket
     const wsClient = new OverleafWebSocketClient();
     await wsClient.connect(projectId, auth, csrfToken);
-
-    console.log('[Overleaf CC] Connected, waiting for project structure...');
-
-    // Wait for joinProjectResponse to be processed
     await wsClient.waitForProjectJoin();
 
-    console.log('[Overleaf CC] Project structure received, getting all IDs...');
+    // Get all document IDs
+    const allDocIds = wsClient.getAllDocIds();
+    console.log(`[Overleaf CC] Found ${allDocIds.length} files in project`);
 
-    // Get all document and file IDs from WebSocket project structure
-    const allIds = wsClient.getAllDocIds();
-    console.log(`[Overleaf CC] Found ${allIds.length} items (documents + files) in project`);
-
-    // Fetch content for each item
     const syncedFiles: any[] = [];
-    for (const id of allIds) {
-      try {
+    const failedFiles: { id: string; path: string; error: string }[] = [];
+
+    // Build current file set for deletion detection
+    const currentPaths = new Set<string>();
+
+    // Process files in batches (to avoid overwhelming the connection)
+    const BATCH_SIZE = 10;
+    for (let i = 0; i < allDocIds.length; i += BATCH_SIZE) {
+      const batch = allDocIds.slice(i, Math.min(i + BATCH_SIZE, allDocIds.length));
+
+      for (const id of batch) {
         const info = wsClient.getDocInfo(id);
         if (!info) {
           console.warn(`[Overleaf CC] No info found for ${id}, skipping`);
           continue;
         }
 
+        currentPaths.add(info.path);
+
+        // For files with hash, check if we need to sync
+        if (info.hash) {
+          const needsSync = syncStateTracker.needsSync(info.path, info.hash);
+
+          if (!needsSync) {
+            console.log(`⏭️  [Overleaf CC] Skipping unchanged file: ${info.path}`);
+            continue;
+          }
+
+          console.log(`📥 [Overleaf CC] File changed, syncing: ${info.path}`);
+        }
+
         console.log(`[Overleaf CC] Syncing ${info.path} (id: ${id}, type: ${info.type})...`);
 
-        if (info.type === 'doc') {
-          // Handle document (text file)
-          const lines = await wsClient.joinDoc(id);
-          await wsClient.leaveDoc(id);
+        try {
+          if (info.type === 'doc') {
+            // Handle document (text file)
+            const lines = await wsClient.joinDoc(id);
+            await wsClient.leaveDoc(id);
 
-          syncedFiles.push({
-            id: id,
-            name: info.name,
+            const content = lines.join('\n');
+
+            // Generate and store hash
+            const hash = generateContentHash(content);
+            syncStateTracker.updateHash(info.path, hash, 'doc');
+
+            syncedFiles.push({
+              id: id,
+              name: info.name,
+              path: info.path,
+              content: content,
+              hash: hash
+            });
+
+            console.log(`[Overleaf CC] ✓ Synced ${info.path} (${lines.length} lines)`);
+          } else if (info.type === 'file') {
+            // Handle file (binary file like image, PDF, etc.)
+            const blob = await wsClient.downloadFile(id, projectId);
+
+            // Convert blob to base64
+            const arrayBuffer = await blob.arrayBuffer();
+            const base64 = btoa(new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), ''));
+
+            // Use file hash from Overleaf if available, otherwise generate from base64
+            const hash = info.hash || generateContentHash(base64);
+            syncStateTracker.updateHash(info.path, hash, 'file');
+
+            syncedFiles.push({
+              id: id,
+              name: info.name,
+              path: info.path,
+              content: base64,
+              hash: hash,
+              encoding: 'base64'
+            });
+
+            console.log(`[Overleaf CC] ✓ Synced ${info.path} (${blob.size} bytes)`);
+          }
+        } catch (error) {
+          console.error(`[Overleaf CC] ✗ Failed to sync ${id}:`, error);
+          failedFiles.push({
+            id,
             path: info.path,
-            content: lines.join('\n'),
-            lines: lines
+            error: (error as Error).message
           });
-
-          console.log(`[Overleaf CC] ✓ Synced ${info.path} (${lines.length} lines)`);
-        } else if (info.type === 'file') {
-          // Handle file (binary file like image, PDF, etc.)
-          const blob = await wsClient.downloadFile(id, projectId);
-
-          // Convert blob to base64
-          const arrayBuffer = await blob.arrayBuffer();
-          const base64 = btoa(new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), ''));
-
-          syncedFiles.push({
-            id: id,
-            name: info.name,
-            path: info.path,
-            content: base64,
-            encoding: 'base64',
-            mimeType: blob.type
-          });
-
-          console.log(`[Overleaf CC] ✓ Synced ${info.path} (${blob.size} bytes, ${blob.type})`);
         }
-      } catch (error) {
-        console.error(`[Overleaf CC] ✗ Failed to sync ${id}:`, error);
-        // Continue with other files
+      }
+
+      // Small delay between batches to avoid overwhelming
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+
+    // Clean up old sync state entries
+    syncStateTracker.cleanup();
+
+    // Detect deleted files
+    const deletedPaths = syncStateTracker.detectDeletedFiles(currentPaths);
+    for (const path of deletedPaths) {
+      console.log(`🗑️  [Overleaf CC] File deleted in Overleaf: ${path}`);
+
+      if (bridgeWs && bridgeWs.readyState === WebSocket.OPEN) {
+        bridgeWs.send(JSON.stringify({
+          type: 'FILE_DELETED',
+          data: { path }
+        }));
+
+        // Remove from sync state
+        syncStateTracker.removeFile(path);
       }
     }
 
     wsClient.disconnect();
 
-    console.log(`[Overleaf CC] Successfully synced ${syncedFiles.length}/${allIds.length} files`);
+    console.log(`[Overleaf CC] Initial sync complete: ${syncedFiles.length} synced, ${failedFiles.length} failed, ${deletedPaths.length} deleted`);
+
+    // Send all synced files to bridge
+    if (syncedFiles.length > 0 && bridgeWs && bridgeWs.readyState === WebSocket.OPEN) {
+      bridgeWs.send(JSON.stringify({
+        type: 'INITIAL_SYNC',
+        data: syncedFiles
+      }));
+      console.log(`[Overleaf CC] Sent ${syncedFiles.length} files to bridge`);
+    }
+
+    // Show summary in dropdown
+    if (failedFiles.length > 0) {
+      dropdown?.showNotification(
+        'warning',
+        'Sync Partially Failed',
+        `${failedFiles.length} files failed to sync. Check console for details.`
+      );
+    }
+
     return { success: true, data: syncedFiles };
   } catch (error) {
     console.error('[Overleaf CC] Sync failed:', error);
