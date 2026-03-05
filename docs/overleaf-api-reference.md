@@ -471,6 +471,81 @@ POST /project/:Project_id/:entity_type/:entity_id/move
 - **Purpose:** Move entity to different folder
 - **Controller File:** `Features/Editor/EditorRouter.mjs`
 
+### File, Document, and Folder Operations
+
+#### Rename Entity
+```
+POST /project/:Project_id/:entity_type/:entity_id/rename
+```
+- **Controller:** `EditorHttpController.renameEntity`
+- **Auth:** `ensureUserCanWriteProjectContent`
+- **Rate Limit:** No specific rate limit configured
+- **Params:**
+  - `entity_type`: "doc", "file", or "folder"
+  - `entity_id`: ID of the entity to rename
+- **Purpose:** Rename document, file, or folder
+- **Controller File:** `Features/Editor/EditorHttpController.mjs`
+
+**Request Format:**
+```json
+{
+  "name": "new_document_name.tex",
+  "source": "editor"
+}
+```
+
+**Required Fields:**
+- `name` - New name for the entity (max 149 characters, min 1 character)
+- `source` - Source of the rename operation (defaults to "editor")
+
+**Response Format:**
+- **Success (204 No Content):** Empty response with 204 status code
+- **Error (400 Bad Request):** If name is invalid (too long, too short, or empty)
+- **Error (403 Forbidden):** If user lacks write permissions
+- **Error (404 Not Found):** If entity doesn't exist
+
+**Usage Example:**
+```javascript
+const response = await fetch('/api/project/project_123/doc/doc_456/rename', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'Authorization': 'Bearer user-session-token'
+  },
+  body: JSON.stringify({
+    name: 'renamed_document.tex',
+    source: 'mirror-service'
+  })
+});
+```
+
+#### Move Entity
+```
+POST /project/:Project_id/:entity_type/:entity_id/move
+```
+- **Controller:** `EditorHttpController.moveEntity`
+- **Auth:** `ensureUserCanWriteProjectContent`
+- **Params:**
+  - `entity_type`: "doc", "file", or "folder"
+  - `entity_id`: ID of the entity to move
+- **Purpose:** Move entity to different folder
+- **Controller File:** `Features/Editor/EditorHttpController.mjs`
+
+**Request Format:**
+```json
+{
+  "folder_id": "target_folder_id",
+  "source": "editor"
+}
+```
+
+**Required Fields:**
+- `folder_id` - ID of the target folder (null for root)
+- `source` - Source of the move operation (defaults to "editor")
+
+**Response Format:**
+- **Success (204 No Content):** Empty response with 204 status code
+
 #### Delete File
 ```
 DELETE /project/:Project_id/file/:entity_id
@@ -478,7 +553,8 @@ DELETE /project/:Project_id/file/:entity_id
 - **Controller:** `EditorHttpController.deleteFile`
 - **Auth:** `ensureUserCanWriteProjectContent`
 - **Purpose:** Delete a file
-- **Controller File:** `Features/Editor/EditorRouter.mjs`
+- **Controller File:** `Features/Editor/EditorHttpController.mjs`
+- **Implementation:** Routes to `deleteEntity` with `entity_type = 'file'`
 
 #### Delete Document
 ```
@@ -487,7 +563,8 @@ DELETE /project/:Project_id/doc/:entity_id
 - **Controller:** `EditorHttpController.deleteDoc`
 - **Auth:** `ensureUserCanWriteProjectContent`
 - **Purpose:** Delete a document
-- **Controller File:** `Features/Editor/EditorRouter.mjs`
+- **Controller File:** `Features/Editor/EditorHttpController.mjs`
+- **Implementation:** Routes to `deleteEntity` with `entity_type = 'doc'`
 
 #### Delete Folder
 ```
@@ -496,7 +573,27 @@ DELETE /project/:Project_id/folder/:entity_id
 - **Controller:** `EditorHttpController.deleteFolder`
 - **Auth:** `ensureUserCanWriteProjectContent`
 - **Purpose:** Delete a folder
-- **Controller File:** `Features/Editor/EditorRouter.mjs`
+- **Controller File:** `Features/Editor/EditorHttpController.mjs`
+- **Implementation:** Routes to `deleteEntity` with `entity_type = 'folder'`
+
+#### Unified Delete Entity (Internal Implementation)
+```
+DELETE /project/:Project_id/:entity_type/:entity_id
+```
+- **Controller:** `EditorHttpController.deleteEntity`
+- **Auth:** `ensureUserCanWriteProjectContent`
+- **Purpose:** Core delete functionality used by all entity types
+- **Response:** Always returns 204 No Content on success
+
+**Implementation Details:**
+1. **Routing:** Separate endpoints for each entity type (doc, file, folder)
+2. **Authorization:** All require write permissions via `ensureUserCanWriteProjectContent`
+3. **Response:** All operations return 204 No Content on success
+4. **Error Handling:**
+   - 400: Invalid entity name (for rename)
+   - 403: Insufficient permissions
+   - 404: Entity not found
+5. **Rate Limiting:** No specific rate limits configured for delete/rename operations
 
 ---
 
