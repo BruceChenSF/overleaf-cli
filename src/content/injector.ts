@@ -333,6 +333,9 @@ async function connectToBridge(): Promise<void> {
                 console.error('[Overleaf CC] Failed to start watcher:', err);
               });
 
+              // File tree watcher is no longer needed - we use fetch interceptor instead
+              // setupFileTreeWatcher();
+
               resolve();
             } else if (message.type === 'response' && !message.data?.success) {
               console.error('[Overleaf CC] Auth failed:', message.data?.error);
@@ -1391,6 +1394,9 @@ function init(): void {
  * Set up file tree watcher to detect file changes
  */
 function setupFileTreeWatcher(): void {
+  console.log('[Overleaf CC] File tree watcher disabled - using fetch interceptor instead');
+  return;  // Early return - file tree watcher no longer needed
+
   console.log('[Overleaf CC] Setting up file tree watcher...');
 
   // Track last known file count to detect actual changes

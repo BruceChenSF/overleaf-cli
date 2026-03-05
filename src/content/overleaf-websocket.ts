@@ -265,7 +265,7 @@ export class OverleafWebSocketClient {
 
       console.log(`📝 [Overleaf CC] File created in Overleaf: ${docPath} (id: ${docId})`);
 
-      // Update docId mapping
+      // Update docId mapping (fetch interceptor handles the actual creation event)
       if (docId && docPath) {
         this.docIdToPath.set(docId, {
           id: docId,
@@ -273,74 +273,21 @@ export class OverleafWebSocketClient {
           name: docName,
           type: 'doc'
         });
-        console.log(`✅ [Overleaf WS] Mapped doc ${docId} -> ${docPath}`);
+        console.log(`✅ [Overleaf WS] Mapped doc ${docId} -> ${docPath} (fetch interceptor handles creation)`);
       }
-
-      if (this.onChangeCallback && docPath) {
-        this.onChangeCallback({
-          type: 'created',
-          path: docPath,
-          docId: docId
-        });
-      } else if (!docPath) {
-        console.warn(`⚠️  [Overleaf WS] Could not extract path from ${message.name}:`, message.args);
-      }
+      // NOTE: Don't trigger onChange here - fetch interceptor will handle file creation
+      console.log(`ℹ️  [Overleaf WS] ${message.name} processed - waiting for fetch interceptor to handle creation`);
     } else if (message.name === 'reciveNewFile' || message.name === 'fileUploaded' || message.name === 'fileCreated') {
       // A new file was uploaded/created in Overleaf
-      console.log(`📢 [Overleaf WS] ${message.name} received:`, message.args);
-      const arg0 = message.args[0] as { file: string; path: string; name: string };
-      console.log(`📝 [Overleaf CC] File created in Overleaf: ${arg0.path || arg0.name}`);
-
-      if (this.onChangeCallback) {
-        this.onChangeCallback({
-          type: 'created',
-          path: arg0.path || `/${arg0.name}`,
-          docId: arg0.file
-        });
-      }
+      // NOTE: File creation is now handled by fetch interceptor for reliability
+      console.log(`📢 [Overleaf WS] ${message.name} received (fetch interceptor handles creation)`);
+      // No action needed - fetch interceptor will handle file creation
     } else if (message.name === 'removeEntity') {
       // A document or file was removed from Overleaf
-      console.log(`📢 [Overleaf WS] removeEntity received:`, message.args);
-
-      // message.args is [entityId, entityType]
-      const entityId = message.args[0] as string;
-      const entityType = message.args[1] as string;
-
-      console.log(`📝 [Overleaf CC] Entity removed from Overleaf: ${entityType} (${entityId})`);
-
-      // CRITICAL: Get path from docId mapping BEFORE deleting
-      const docInfo = this.docIdToPath.get(entityId);
-
-      if (!docInfo) {
-        console.error(`⚠️  [Overleaf WS] Unknown entity ID ${entityId} in removeEntity. Current mappings:`, Array.from(this.docIdToPath.keys()));
-        // Still try to notify with just the ID
-        if (this.onChangeCallback) {
-          this.onChangeCallback({
-            type: 'deleted',
-            path: `/${entityId}`,  // Fallback path
-            docId: entityId
-          });
-        }
-        return;
-      }
-
-      const filePath = docInfo.path;
-      console.log(`✅ [Overleaf WS] Found path for ${entityId}: ${filePath}`);
-
-      // Remove from docId mapping AFTER getting path
-      this.docIdToPath.delete(entityId);
-      console.log(`🗑️  [Overleaf WS] Removed ${entityId} from docIdToPath mapping`);
-
-      if (this.onChangeCallback) {
-        console.log(`📤 [Overleaf WS] Sending deletion notification to callback: ${filePath}`);
-        this.onChangeCallback({
-          type: 'deleted',
-          path: filePath,
-          docId: entityId
-        });
-      } else {
-        console.warn(`⚠️  [Overleaf WS] No onChangeCallback registered for deletion`);
-      }
+      // NOTE: File deletion is now handled by fetch interceptor for reliability
+      console.log(`📢 [Overleaf WS] removeEntity received (fetch interceptor handles deletion)`);
+      // No action needed - fetch interceptor will handle file deletion
+      // We keep the docIdToPath entry for fetch interceptor to use
     } else if (message.name === 'docRemoved') {
       // A document was deleted from Overleaf
       console.log(`📢 [Overleaf WS] docRemoved received:`, message.args);
