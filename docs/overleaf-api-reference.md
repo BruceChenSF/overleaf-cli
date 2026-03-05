@@ -99,16 +99,7 @@ POST /project/:Project_id/join
 
 ### Document Operations
 
-#### Get Document Content
-```
-GET /Project/:Project_id/doc/:Doc_id/download
-```
-- **Controller:** `DocumentUpdaterController.getDoc`
-- **Auth:** `ensureUserCanReadProject`
-- **Purpose:** Download document content
-- **Note:** "download" suffix avoids conflict with private API route
-
-#### Get Document (Private API)
+#### Get Document Content (Private API)
 ```
 GET /project/:Project_id/doc/:doc_id
 ```
@@ -118,8 +109,38 @@ GET /project/:Project_id/doc/:doc_id
 - **Query Params:**
   - `plain=true` - Return as plain text
   - `peek=true` - Peek without version increment
-- **Response:** JSON with `lines`, `version`, `ranges`, `pathname`, etc.
-- **Controller File:** `Features/Documents/DocumentController.mjs`
+- **Purpose:** Get document content for file synchronization
+- **Response Format:**
+  ```json
+  {
+    "lines": ["\\documentclass{article}", "..."],
+    "version": 123,
+    "ranges": {
+      "comments": [...],
+      "trackedChanges": [...]
+    },
+    "pathname": "/main.tex",
+    "projectHistoryId": "history_id_string",
+    "projectHistoryType": "project-history",
+    "historyRangesSupport": true,
+    "otMigrationStage": 2,
+    "resolvedCommentIds": ["comment1", "comment2"]
+  }
+  ```
+  When `plain=true` returns plain text content directly
+- **Controller File:** `services/web/app/src/Features/Documents/DocumentController.mjs`
+- **Implementation:** Uses `ProjectEntityHandler.promises.getDoc()` → `DocstoreManager.promises.getDoc()`
+
+#### Download Document Content (Web API)
+```
+GET /Project/:Project_id/doc/:Doc_id/download
+```
+- **Router:** `webRouter`
+- **Controller:** `DocumentUpdaterController.getDoc`
+- **Auth:** `ensureUserCanReadProject`
+- **Purpose:** Download document content as plain text
+- **Note:** "download" suffix to avoid conflict with private API route
+- **Controller File:** `services/web/app/src/Features/DocumentUpdater/DocumentUpdaterController.mjs`
 
 #### Set Document Content (Private API)
 ```
@@ -416,8 +437,13 @@ Key rate limiters relevant to file operations:
 
 2. **Document Content Sync**
    - Read via: `GET /project/:Project_id/doc/:doc_id` (private API)
+     - Query params: `plain=true` for text, `peek=true` for non-incremental reads
+     - Returns `lines`, `version`, `ranges`, `pathname`, and project metadata
+     - Critical for OT/conflict detection with `version` field
    - Updates via: `POST /project/:Project_id/doc/:doc_id` (private API)
-   - Includes version tracking for OT (Operational Transformation)
+     - Requires `version` for optimistic locking
+     - Supports `ranges` for comments and tracked changes
+   - Binary downloads: `GET /Project/:Project_id/doc/:Doc_id/download` (web API)
 
 3. **File Content Sync**
    - Read via: `GET /Project/:Project_id/file/:File_id`
@@ -429,9 +455,11 @@ Key rate limiters relevant to file operations:
    - Document update operations
 
 5. **Key Controllers to Study**
-   - `ProjectEntityHandler` - Core entity operations
+   - `ProjectEntityHandler` - Core entity operations and document retrieval
    - `EditorHttpController` - User-initiated changes
-   - `DocumentController` - Document content operations
+   - `DocumentController` - Document content operations (GET/SET)
+   - `DocstoreManager` - Document storage and version management
+   - `DocumentUpdaterController` - Document download operations
 
 ---
 
@@ -460,4 +488,53 @@ Key rate limiters relevant to file operations:
 
 ---
 
-**Status:** Initial exploration complete. Ready for detailed endpoint analysis in subsequent tasks.
+---
+
+## Research Findings
+
+### Task 3: Document File Content Retrieval API - Implementation Details
+
+**Research Date:** 2026-03-06
+
+### Discrepancies Found
+
+1. **Incorrect File Path:**
+   - **Task Reference:** `C:\Home\CodeProjects\overleaf\services\web\app\src\Project\ProjectEntity.js`
+   - **Reality:** File does not exist
+   - **Correct Location:** `C:\Home\CodeProjects\overleaf\services\web\app\src\Features\Documents\DocumentController.mjs`
+
+2. **Already Documented Endpoint:**
+   - The endpoint was already partially documented in the existing documentation (lines 112-123)
+   - Required more detailed information about response format and implementation
+
+3. **Dual API Endpoints:**
+   - **Private API:** `GET /project/:Project_id/doc/:doc_id` - Requires service-to-service auth
+   - **Web API:** `GET /Project/:Project_id/doc/:Doc_id/download` - Requires user session auth
+
+4. **Enhanced Response Format:**
+   - Original task description was missing critical fields:
+     - `pathname` - File system path
+     - `projectHistoryId` and `projectHistoryType` - History system info
+     - `historyRangesSupport` - Feature flag for track changes
+     - `otMigrationStage` - Migration status
+     - `resolvedCommentIds` - Comment resolution status
+
+### Key Implementation Details
+
+**Controller Chain:**
+1. `DocumentController.getDocument()` (HTTP entry point)
+2. `ProjectEntityHandler.promises.getDoc()` (Entity validation)
+3. `DocstoreManager.promises.getDoc()` (Document storage)
+
+**Version Management:**
+- Each document has a `version` number for optimistic locking
+- Supports `peek=true` parameter to read without incrementing version
+- Essential for Operational Transformation (OT) and conflict detection
+
+**Authentication:**
+- Private API: `requirePrivateApiAuth()` - service-to-service tokens
+- Web API: `ensureUserCanReadProject()` - user session validation
+
+**Status:** Research complete. Documented accurate endpoint details and implementation discrepancies.
+
+---
