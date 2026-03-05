@@ -171,6 +171,86 @@ async function manualSync(): Promise<void> {
 }
 
 /**
+ * Connect to bridge WebSocket
+ */
+async function connectToBridge(): Promise<void> {
+  try {
+    console.log(`[Overleaf CC] Connecting to bridge at ws://localhost:${BRIDGE_PORT}`);
+    bridgeWs = new WebSocket(`ws://localhost:${BRIDGE_PORT}`);
+
+    await new Promise<void>((resolve, reject) => {
+      if (!bridgeWs) return reject(new Error('WebSocket not initialized'));
+
+      bridgeWs.onopen = () => {
+        console.log('[Overleaf CC] ✓ Connected to bridge');
+        dropdown?.updateConnectionStatus('connected');
+        resolve();
+      };
+
+      bridgeWs.onerror = (error) => {
+        console.error('[Overleaf CC] Bridge connection error:', error);
+        dropdown?.updateConnectionStatus('error', 'Failed to connect to bridge');
+        reject(error);
+      };
+
+      bridgeWs.onclose = () => {
+        console.log('[Overleaf CC] Bridge connection closed');
+        dropdown?.updateConnectionStatus('disconnected');
+      };
+
+      bridgeWs.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          console.log('[Overleaf CC] Received from bridge:', message.type);
+          handleBridgeMessage(message);
+        } catch (error) {
+          console.error('[Overleaf CC] Failed to parse bridge message:', error);
+        }
+      };
+
+      // Timeout after 5 seconds
+      setTimeout(() => reject(new Error('Bridge connection timeout')), 5000);
+    });
+  } catch (error) {
+    console.error('[Overleaf CC] Failed to connect to bridge:', error);
+    dropdown?.updateConnectionStatus('error', (error as Error).message);
+  }
+}
+
+/**
+ * Handle message from bridge
+ */
+function handleBridgeMessage(message: BridgeToExtensionMessage): void {
+  switch (message.type) {
+    case 'FILE_CONTENT':
+    case 'FILE_STATUS':
+    case 'ALL_FILES':
+    case 'FILE_CHANGED':
+      // Forward to sync manager
+      syncManager?.emit(`bridge:${message.type}`, message);
+      break;
+
+    case 'TASK_COMPLETE':
+      syncManager?.handleTaskCompletion(message);
+      break;
+
+    case 'CONFLICT_DETECTED':
+      console.warn('[Overleaf CC] Conflict detected:', message.payload);
+      if (dropdown) {
+        dropdown.updateSyncStatus('conflict');
+      }
+      break;
+
+    case 'ERROR':
+      console.error('[Overleaf CC] Bridge error:', message.payload);
+      break;
+
+    default:
+      console.log('[Overleaf CC] Unknown message type:', (message as any).type);
+  }
+}
+
+/**
  * Create bridge client wrapper
  */
 function createBridgeClient() {
@@ -180,17 +260,42 @@ function createBridgeClient() {
     },
 
     sendMessage: async (message: any) => {
-      // Send message to background service worker which forwards to bridge
-      const response = await chrome.runtime.sendMessage({
-        type: 'BRIDGE_MESSAGE',
-        payload: message
-      });
-
-      if (response?.error) {
-        throw new Error(response.error);
+      if (!bridgeWs || bridgeWs.readyState !== WebSocket.OPEN) {
+        throw new Error('Bridge WebSocket not connected');
       }
 
-      return response;
+      return new Promise((resolve, reject) => {
+        const messageId = `msg_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+
+        // Set up one-time listener for response
+        const handler = (event: MessageEvent) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (data.requestId === messageId) {
+              bridgeWs?.removeEventListener('message', handler as any);
+              resolve(data);
+            }
+          } catch (error) {
+            reject(error);
+          }
+        };
+
+        bridgeWs.addEventListener('message', handler as any);
+
+        // Send message with requestId for correlation
+        const messageWithId = {
+          ...message,
+          requestId: messageId
+        };
+
+        bridgeWs.send(JSON.stringify(messageWithId));
+
+        // Timeout after 5 seconds
+        setTimeout(() => {
+          bridgeWs?.removeEventListener('message', handler as any);
+          reject(new Error('Bridge request timeout'));
+        }, 5000);
+      });
     }
   };
 }
