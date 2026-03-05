@@ -136,7 +136,7 @@ If sync triggers when expanding folders:
 
 ## Development
 
-See [docs/DESIGN.md](docs/DESIGN.md) for detailed design documentation.
+See [docs/plans/2026-03-03-overleaf-cc-design.md](docs/plans/2026-03-03-overleaf-cc-design.md) for detailed design documentation.
 
 See [docs/INSTALLATION.md](docs/INSTALLATION.md) for detailed setup instructions.
 
