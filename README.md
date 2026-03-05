@@ -79,6 +79,29 @@ overleaf-cc-bridge
 3. Choose your terminal mode (local or in-page)
 4. Start using Claude Code!
 
+## Troubleshooting
+
+### File Sync Timeouts
+
+If you see "Request timeout" errors during sync:
+- The extension automatically retries failed downloads up to 3 times
+- Check your internet connection
+- Try reloading the extension
+- See [Troubleshooting Guide](docs/troubleshooting.md) for details
+
+### Files Not Deleting
+
+If deleted files remain in local workspace:
+- Check browser console for error messages
+- Ensure Bridge is running and connected
+- Try manual sync: Click the extension icon → Sync Now
+
+### Excessive Sync Triggers
+
+If sync triggers when expanding folders:
+- This is fixed in v1.2.0 - update the extension
+- The file tree watcher now distinguishes between folder expansion and file changes
+
 ## Sync Modes
 
 ### Auto Sync (Default)
