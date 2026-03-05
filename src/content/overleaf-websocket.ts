@@ -58,6 +58,20 @@ interface FileChange {
   docId?: string;
 }
 
+interface RetryConfig {
+  maxAttempts: number;
+  initialDelay: number;
+  maxDelay: number;
+  backoffMultiplier: number;
+}
+
+const DEFAULT_RETRY_CONFIG: RetryConfig = {
+  maxAttempts: 3,
+  initialDelay: 1000,
+  maxDelay: 10000,
+  backoffMultiplier: 2
+};
+
 export class OverleafWebSocketClient {
   private ws: WebSocket | null = null;
   private messageSeq = 0;
@@ -65,6 +79,35 @@ export class OverleafWebSocketClient {
   private docIdToPath = new Map<string, DocInfo>(); // docId/fileId -> {id, path, name, type}
   private projectJoined = false;
   private onChangeCallback?: ChangeEventHandler;
+
+  /**
+   * Execute a function with retry logic and exponential backoff
+   */
+  private async retryWithBackoff<T>(
+    fn: () => Promise<T>,
+    config: RetryConfig = DEFAULT_RETRY_CONFIG,
+    context: string = 'operation'
+  ): Promise<T> {
+    let lastError: Error | undefined;
+    let delay = config.initialDelay;
+
+    for (let attempt = 1; attempt <= config.maxAttempts; attempt++) {
+      try {
+        return await fn();
+      } catch (error) {
+        lastError = error as Error;
+        console.warn(`[Overleaf WS] ${context} failed (attempt ${attempt}/${config.maxAttempts}):`, error);
+
+        if (attempt < config.maxAttempts) {
+          console.log(`[Overleaf WS] Retrying ${context} in ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          delay = Math.min(delay * config.backoffMultiplier, config.maxDelay);
+        }
+      }
+    }
+
+    throw new Error(`${context} failed after ${config.maxAttempts} attempts: ${lastError?.message}`);
+  }
 
   /**
    * Connect to Overleaf WebSocket
@@ -208,6 +251,125 @@ export class OverleafWebSocketClient {
           console.warn(`⚠️ [Overleaf WS] No onChangeCallback registered`);
         }
       }
+    } else if (message.name === 'reciveNewDoc' || message.name === 'newDocCreated') {
+      // A new document was created in Overleaf
+      console.log(`📢 [Overleaf WS] ${message.name} received:`, message.args);
+
+      // message.args format varies - try to extract docId and doc info
+      const docId = message.args[0] as string;
+      const docInfo = message.args[1] as any; // Could be object with path, name, etc.
+
+      // Try different formats
+      const docPath = docInfo?.path || docInfo?.name || (typeof message.args[1] === 'string' ? message.args[1] : undefined);
+      const docName = docInfo?.name || docPath || `doc_${docId}`;
+
+      console.log(`📝 [Overleaf CC] File created in Overleaf: ${docPath} (id: ${docId})`);
+
+      // Update docId mapping
+      if (docId && docPath) {
+        this.docIdToPath.set(docId, {
+          id: docId,
+          path: docPath,
+          name: docName,
+          type: 'doc'
+        });
+        console.log(`✅ [Overleaf WS] Mapped doc ${docId} -> ${docPath}`);
+      }
+
+      if (this.onChangeCallback && docPath) {
+        this.onChangeCallback({
+          type: 'created',
+          path: docPath,
+          docId: docId
+        });
+      } else if (!docPath) {
+        console.warn(`⚠️  [Overleaf WS] Could not extract path from ${message.name}:`, message.args);
+      }
+    } else if (message.name === 'reciveNewFile' || message.name === 'fileUploaded' || message.name === 'fileCreated') {
+      // A new file was uploaded/created in Overleaf
+      console.log(`📢 [Overleaf WS] ${message.name} received:`, message.args);
+      const arg0 = message.args[0] as { file: string; path: string; name: string };
+      console.log(`📝 [Overleaf CC] File created in Overleaf: ${arg0.path || arg0.name}`);
+
+      if (this.onChangeCallback) {
+        this.onChangeCallback({
+          type: 'created',
+          path: arg0.path || `/${arg0.name}`,
+          docId: arg0.file
+        });
+      }
+    } else if (message.name === 'removeEntity') {
+      // A document or file was removed from Overleaf
+      console.log(`📢 [Overleaf WS] removeEntity received:`, message.args);
+
+      // message.args is [entityId, entityType]
+      const entityId = message.args[0] as string;
+      const entityType = message.args[1] as string;
+
+      console.log(`📝 [Overleaf CC] Entity removed from Overleaf: ${entityType} (${entityId})`);
+
+      // Try to get path from docId mapping
+      const docInfo = this.docIdToPath.get(entityId);
+      const filePath = docInfo?.path || `/${entityId}`;
+
+      // Remove from docId mapping
+      this.docIdToPath.delete(entityId);
+
+      if (this.onChangeCallback && docInfo) {
+        // Only notify if we know the file path
+        this.onChangeCallback({
+          type: 'deleted',
+          path: filePath,
+          docId: entityId
+        });
+      } else if (!docInfo) {
+        console.warn(`⚠️  [Overleaf WS] Unknown entity ID ${entityId}, cannot delete file`);
+      }
+    } else if (message.name === 'docRemoved') {
+      // A document was deleted from Overleaf
+      console.log(`📢 [Overleaf WS] docRemoved received:`, message.args);
+      const arg0 = message.args[0] as { doc: string; path: string };
+      const docInfo = this.docIdToPath.get(arg0.doc) || { path: arg0.path };
+      console.log(`📝 [Overleaf CC] File deleted in Overleaf: ${docInfo.path}`);
+
+      // Remove from docId mapping
+      if (arg0.doc) {
+        this.docIdToPath.delete(arg0.doc);
+      }
+
+      if (this.onChangeCallback) {
+        this.onChangeCallback({
+          type: 'deleted',
+          path: docInfo.path,
+          docId: arg0.doc
+        });
+      }
+    } else if (message.name === 'fileUploaded' || message.name === 'fileCreated') {
+      // A file was uploaded/created in Overleaf
+      console.log(`📢 [Overleaf WS] ${message.name} received:`, message.args);
+      const arg0 = message.args[0] as { file: string; path: string; name: string };
+      console.log(`📝 [Overleaf CC] File created in Overleaf: ${arg0.path || arg0.name}`);
+
+      if (this.onChangeCallback) {
+        this.onChangeCallback({
+          type: 'created',
+          path: arg0.path || `/${arg0.name}`,
+          docId: arg0.file
+        });
+      }
+    } else if (message.name === 'fileRemoved') {
+      // A file was deleted from Overleaf
+      console.log(`📢 [Overleaf WS] fileRemoved received:`, message.args);
+      const arg0 = message.args[0] as { file: string; path: string };
+      console.log(`📝 [Overleaf CC] File deleted in Overleaf: ${arg0.path}`);
+
+      if (this.onChangeCallback) {
+        this.onChangeCallback({
+          type: 'deleted',
+          path: arg0.path,
+          docId: arg0.file
+        });
+      }
     }
   }
 
@@ -314,29 +476,33 @@ export class OverleafWebSocketClient {
   async joinDoc(docId: string): Promise<string[]> {
     console.log(`[Overleaf WS] Joining doc: ${docId}`);
 
-    const contentData = await this.sendRequest({
-      name: 'joinDoc',
-      args: [docId, { encodeRanges: true }],
-    });
+    return this.retryWithBackoff(
+      async () => {
+        const contentData = await this.sendRequest({
+          name: 'joinDoc',
+          args: [docId, { encodeRanges: true }],
+        });
 
-    // Parse response: [null, escapedLines[], version, ops, comments]
-    const escapedLines = contentData[1] || [];
-    const version = contentData[2] || 0;
+        const escapedLines = contentData[1] || [];
+        const version = contentData[2] || 0;
 
-    console.log(`[Overleaf WS] Got doc content: ${docId}, version: ${version}, lines: ${escapedLines.length}`);
+        console.log(`[Overleaf WS] Got doc content: ${docId}, version: ${version}, lines: ${escapedLines.length}`);
 
-    // Decode UTF-8
-    const decodedLines = escapedLines.map((line: string) => {
-      try {
-        const bytes = new Uint8Array([...line].map((c) => c.charCodeAt(0)));
-        return new TextDecoder('utf-8').decode(bytes);
-      } catch (e) {
-        console.error('[Overleaf WS] Failed to decode line:', e);
-        return line;
-      }
-    });
+        const decodedLines = escapedLines.map((line: string) => {
+          try {
+            const bytes = new Uint8Array([...line].map((c) => c.charCodeAt(0)));
+            return new TextDecoder('utf-8').decode(bytes);
+          } catch (e) {
+            console.error('[Overleaf WS] Failed to decode line:', e);
+            return line;
+          }
+        });
 
-    return decodedLines;
+        return decodedLines;
+      },
+      DEFAULT_RETRY_CONFIG,
+      `joinDoc(${docId})`
+    );
   }
 
   /**
@@ -354,40 +520,40 @@ export class OverleafWebSocketClient {
    * Download a binary file (image, PDF, etc.) from Overleaf
    */
   async downloadFile(fileRefId: string, projectId: string): Promise<Blob> {
-    const fileInfo = this.docIdToPath.get(fileRefId);
-    if (!fileInfo || fileInfo.type !== 'file') {
-      throw new Error(`File ${fileRefId} not found or is not a file`);
-    }
+    return this.retryWithBackoff(
+      async () => {
+        const fileInfo = this.docIdToPath.get(fileRefId);
+        if (!fileInfo || fileInfo.type !== 'file') {
+          throw new Error(`File ${fileRefId} not found or is not a file`);
+        }
 
-    console.log(`[Overleaf WS] Downloading file: ${fileInfo.path} (hash: ${fileInfo.hash})`);
+        console.log(`[Overleaf WS] Downloading file: ${fileInfo.path} (hash: ${fileInfo.hash})`);
 
-    if (!fileInfo.hash) {
-      throw new Error(`File ${fileRefId} does not have a hash`);
-    }
+        if (!fileInfo.hash) {
+          throw new Error(`File ${fileRefId} does not have a hash`);
+        }
 
-    // Use the correct URL format: /project/{projectId}/blob/{hash}
-    const domain = window.location.hostname;
-    const fileUrl = `https://${domain}/project/${projectId}/blob/${fileInfo.hash}`;
+        const domain = window.location.hostname;
+        const fileUrl = `https://${domain}/project/${projectId}/blob/${fileInfo.hash}`;
 
-    console.log(`[Overleaf WS] Fetching: ${fileUrl}`);
+        console.log(`[Overleaf WS] Fetching: ${fileUrl}`);
 
-    try {
-      const response = await fetch(fileUrl, {
-        method: 'GET',
-        credentials: 'include',
-      });
+        const response = await fetch(fileUrl, {
+          method: 'GET',
+          credentials: 'include',
+        });
 
-      if (!response.ok) {
-        throw new Error(`Failed to download file: ${response.status} ${response.statusText}`);
-      }
+        if (!response.ok) {
+          throw new Error(`Failed to download file: ${response.status} ${response.statusText}`);
+        }
 
-      const blob = await response.blob();
-      console.log(`[Overleaf WS] Downloaded ${fileInfo.path} (${blob.size} bytes, type: ${blob.type})`);
-      return blob;
-    } catch (error) {
-      console.error(`[Overleaf WS] Download failed:`, error);
-      throw error;
-    }
+        const blob = await response.blob();
+        console.log(`[Overleaf WS] Downloaded ${fileInfo.path} (${blob.size} bytes, type: ${blob.type})`);
+        return blob;
+      },
+      DEFAULT_RETRY_CONFIG,
+      `downloadFile(${fileRefId})`
+    );
   }
 
   /**
@@ -414,28 +580,37 @@ export class OverleafWebSocketClient {
    * Send a request and wait for response
    */
   private sendRequest(message: { name: string; args: unknown[] }): Promise<any> {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      throw new Error('WebSocket not connected');
-    }
-
-    return new Promise((resolve, reject) => {
-      const seq = this.messageSeq;
-
-      // Send message
-      this.ws!.send(`5:${seq}+::` + JSON.stringify(message));
-      this.messageSeq++;
-
-      // Store callback
-      this.pendingRequests.set(seq, resolve);
-
-      // Timeout
-      setTimeout(() => {
-        if (this.pendingRequests.has(seq)) {
-          this.pendingRequests.delete(seq);
-          reject(new Error('Request timeout'));
+    return this.retryWithBackoff(
+      async () => {
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+          throw new Error('WebSocket not connected');
         }
-      }, 5000);
-    });
+
+        return new Promise((resolve, reject) => {
+          const seq = this.messageSeq;
+
+          this.ws!.send(`5:${seq}+::` + JSON.stringify(message));
+          this.messageSeq++;
+
+          this.pendingRequests.set(seq, resolve);
+
+          const timeout = setTimeout(() => {
+            if (this.pendingRequests.has(seq)) {
+              this.pendingRequests.delete(seq);
+              reject(new Error('Request timeout'));
+            }
+          }, 3000);
+
+          const originalResolve = resolve;
+          this.pendingRequests.set(seq, (response: any) => {
+            clearTimeout(timeout);
+            originalResolve(response);
+          });
+        });
+      },
+      DEFAULT_RETRY_CONFIG,
+      `WebSocket request (${message.name})`
+    );
   }
 
   /**
