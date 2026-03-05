@@ -27,7 +27,10 @@
       "Bash(npm run typecheck:*)",
       "Bash(npm run test:*)",
       "Bash(npm run test:unit:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(git reset:*)",
+      "Skill(superpowers:subagent-driven-development)",
+      "Bash(npm test:*)"
     ]
   },
   "enabledPlugins": {

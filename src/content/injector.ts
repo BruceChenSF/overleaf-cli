@@ -1395,6 +1395,25 @@ async function startOverleafWatcher(): Promise<void> {
     overleafWsClient.onChange(async (change) => {
       console.log(`📢 [Overleaf CC] Change detected: ${change.type} - ${change.path}`);
 
+      if (change.type === 'deleted') {
+        // File deleted in Overleaf
+        console.log(`🗑️  [Overleaf CC] File deleted in Overleaf: ${change.path}`);
+
+        if (bridgeWs && bridgeWs.readyState === WebSocket.OPEN) {
+          bridgeWs.send(JSON.stringify({
+            type: 'FILE_DELETED',
+            data: {
+              path: change.path,
+              docId: change.docId
+            }
+          }));
+          console.log(`✓ [Overleaf CC] Sent deletion notification to bridge: ${change.path}`);
+        } else {
+          console.warn(`⚠️  [Overleaf CC] Cannot sync deletion - bridge not connected`);
+        }
+        return;
+      }
+
       // For modified and created files, fetch content from Overleaf
       let content: string | undefined;
       if (change.type === 'modified' || change.type === 'created') {

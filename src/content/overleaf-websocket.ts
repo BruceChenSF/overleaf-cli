@@ -308,22 +308,38 @@ export class OverleafWebSocketClient {
 
       console.log(`📝 [Overleaf CC] Entity removed from Overleaf: ${entityType} (${entityId})`);
 
-      // Try to get path from docId mapping
+      // CRITICAL: Get path from docId mapping BEFORE deleting
       const docInfo = this.docIdToPath.get(entityId);
-      const filePath = docInfo?.path || `/${entityId}`;
 
-      // Remove from docId mapping
+      if (!docInfo) {
+        console.error(`⚠️  [Overleaf WS] Unknown entity ID ${entityId} in removeEntity. Current mappings:`, Array.from(this.docIdToPath.keys()));
+        // Still try to notify with just the ID
+        if (this.onChangeCallback) {
+          this.onChangeCallback({
+            type: 'deleted',
+            path: `/${entityId}`,  // Fallback path
+            docId: entityId
+          });
+        }
+        return;
+      }
+
+      const filePath = docInfo.path;
+      console.log(`✅ [Overleaf WS] Found path for ${entityId}: ${filePath}`);
+
+      // Remove from docId mapping AFTER getting path
       this.docIdToPath.delete(entityId);
+      console.log(`🗑️  [Overleaf WS] Removed ${entityId} from docIdToPath mapping`);
 
-      if (this.onChangeCallback && docInfo) {
-        // Only notify if we know the file path
+      if (this.onChangeCallback) {
+        console.log(`📤 [Overleaf WS] Sending deletion notification to callback: ${filePath}`);
         this.onChangeCallback({
           type: 'deleted',
           path: filePath,
           docId: entityId
         });
-      } else if (!docInfo) {
-        console.warn(`⚠️  [Overleaf WS] Unknown entity ID ${entityId}, cannot delete file`);
+      } else {
+        console.warn(`⚠️  [Overleaf WS] No onChangeCallback registered for deletion`);
       }
     } else if (message.name === 'docRemoved') {
       // A document was deleted from Overleaf

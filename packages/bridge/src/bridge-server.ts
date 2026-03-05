@@ -4,6 +4,7 @@ import { SyncManagerDOM } from './sync-manager-dom.js';
 import { promises as fs } from 'fs';
 import path from 'path';
 import type { BridgeMessage, AuthMessage, CommandMessage } from './types.js';
+import { handleFileDeleted } from './handlers/file-deleted-handler.js';
 
 export class BridgeServer {
   private wss: WebSocketServer;
@@ -74,6 +75,9 @@ export class BridgeServer {
         break;
       case 'FILE_CHANGED':
         await this.handleFileChanged(ws, message as any, sendResponse);
+        break;
+      case 'FILE_DELETED':
+        await this.handleFileDeleted(ws, message as any, sendResponse);
         break;
       case 'EXTENSION_MESSAGE':
         // Response from extension - handled by SyncManagerDOM
@@ -393,6 +397,40 @@ export class BridgeServer {
       });
     } catch (error) {
       console.error(`❌ [Bridge] Error handling file change for ${filePath}:`, error);
+      sendResponse({
+        type: 'response',
+        data: { success: false, error: (error as Error).message }
+      });
+    }
+  }
+
+  private async handleFileDeleted(ws: WebSocket, message: any, sendResponse: (data: any) => void): Promise<void> {
+    const client = this.clients.get(ws);
+
+    if (!client) {
+      console.warn('[Bridge] File deleted but no client found');
+      sendResponse({
+        type: 'response',
+        data: { success: false, error: 'Not authenticated' }
+      });
+      return;
+    }
+
+    const { path: filePath, docId } = message.data;
+    const projectDir = path.join(this.workDir, client.projectId);
+
+    console.log(`🗑️  [Bridge] File deleted in Overleaf: ${filePath}`);
+
+    try {
+      await handleFileDeleted({ path: filePath, docId }, projectDir);
+
+      sendResponse({
+        type: 'FILE_DELETED_ACK',
+        payload: { path: filePath }
+      });
+      console.log(`✓ [Bridge] File deleted: ${filePath}`);
+    } catch (error) {
+      console.error(`✗ [Bridge] Failed to delete ${filePath}:`, error);
       sendResponse({
         type: 'response',
         data: { success: false, error: (error as Error).message }
