@@ -1,0 +1,15 @@
+{
+  "name": "@overleaf-cc/extension",
+  "version": "1.0.0",
+  "description": "Browser extension for Overleaf API interception",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite build --watch"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/chrome": "^0.0.254",
+    "typescript": "^5.3.3",
+    "vite": "^5.0.10"
+  }
+}
