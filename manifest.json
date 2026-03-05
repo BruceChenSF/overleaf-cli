@@ -38,7 +38,7 @@
   "web_accessible_resources": [
     {
       "matches": ["https://*.overleaf.com/*"],
-      "resources": ["src/terminal/*"],
+      "resources": ["src/terminal/*", "src/styles/*"],
       "use_dynamic_url": false
     }
   ]
