@@ -22,7 +22,13 @@ function createTerminalButton(): HTMLElement {
   button.id = 'toolbar-menu-bar-item-terminal';
   button.className = 'ide-redesign-toolbar-dropdown-toggle-subdued ide-redesign-toolbar-button-subdued menu-bar-toggle btn btn-secondary';
   button.setAttribute('aria-expanded', 'false');
-  button.innerHTML = 'Terminal';
+  button.innerHTML = `
+    <img src="https://unpkg.com/@lobehub/icons-static-svg@latest/icons/claude-color.svg"
+         alt="Claude"
+         width="16"
+         height="16"
+         style="vertical-align: middle;" />
+  `;
 
   button.addEventListener('click', openTerminal);
 
