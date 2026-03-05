@@ -50,7 +50,7 @@ POST /project/:Project_id/join
 
 #### Get Document Content
 ```
-GET /project/:Project_id/doc/:Doc_id/download
+GET /Project/:Project_id/doc/:Doc_id/download
 ```
 - **Controller:** `DocumentUpdaterController.getDoc`
 - **Auth:** `ensureUserCanReadProject`
