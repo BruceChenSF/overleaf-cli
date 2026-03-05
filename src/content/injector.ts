@@ -11,6 +11,12 @@ let syncManager: SyncManager | null = null;
 let bridgeWs: WebSocket | null = null;
 const BRIDGE_PORT = 3456;
 
+// Promise storage for pending requests
+const pendingRequests = new Map<string, {
+  resolve: (value: any) => void;
+  reject: (error: any) => void;
+}>();
+
 function extractProjectId(): string | null {
   const match = window.location.href.match(/\/project\/([a-f0-9]+)/i);
   return match ? match[1] : null;
@@ -220,7 +226,23 @@ async function connectToBridge(): Promise<void> {
 /**
  * Handle message from bridge
  */
-function handleBridgeMessage(message: BridgeToExtensionMessage): void {
+function handleBridgeMessage(message: any): void {
+  // Handle response messages first (for pending requests)
+  if (message.type === 'response' && message.requestId) {
+    const pending = pendingRequests.get(message.requestId);
+    if (pending) {
+      pendingRequests.delete(message.requestId);
+
+      if (message.data?.success === false || message.data?.error) {
+        pending.reject(new Error(message.data?.error || 'Request failed'));
+      } else {
+        pending.resolve(message.data);
+      }
+    }
+    return;
+  }
+
+  // Handle other message types
   switch (message.type) {
     case 'FILE_CONTENT':
     case 'FILE_STATUS':
@@ -245,6 +267,10 @@ function handleBridgeMessage(message: BridgeToExtensionMessage): void {
       console.error('[Overleaf CC] Bridge error:', message.payload);
       break;
 
+    case 'response':
+      // Generic response without requestId - ignore
+      break;
+
     default:
       console.log('[Overleaf CC] Unknown message type:', (message as any).type);
   }
@@ -264,37 +290,27 @@ function createBridgeClient() {
         throw new Error('Bridge WebSocket not connected');
       }
 
+      const requestId = `msg_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+
       return new Promise((resolve, reject) => {
-        const messageId = `msg_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+        // Store pending promise
+        pendingRequests.set(requestId, { resolve, reject });
 
-        // Set up one-time listener for response
-        const handler = (event: MessageEvent) => {
-          try {
-            const data = JSON.parse(event.data);
-            if (data.requestId === messageId) {
-              bridgeWs?.removeEventListener('message', handler as any);
-              resolve(data);
-            }
-          } catch (error) {
-            reject(error);
+        // Set up timeout
+        setTimeout(() => {
+          if (pendingRequests.has(requestId)) {
+            pendingRequests.delete(requestId);
+            reject(new Error('Bridge request timeout'));
           }
-        };
+        }, 5000);
 
-        bridgeWs.addEventListener('message', handler as any);
-
-        // Send message with requestId for correlation
+        // Send message with requestId
         const messageWithId = {
           ...message,
-          requestId: messageId
+          requestId
         };
 
         bridgeWs.send(JSON.stringify(messageWithId));
-
-        // Timeout after 5 seconds
-        setTimeout(() => {
-          bridgeWs?.removeEventListener('message', handler as any);
-          reject(new Error('Bridge request timeout'));
-        }, 5000);
       });
     }
   };
