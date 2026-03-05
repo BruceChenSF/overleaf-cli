@@ -33,6 +33,62 @@ GET /project/:Project_id/entities
 - **Purpose:** Returns the complete file/folder structure for a project
 - **Controller File:** `ProjectController.mjs`
 
+#### Get All Documents in Project
+```
+GET /project/:Project_id/entities
+```
+- **Controller:** `ProjectController.projectEntitiesJson`
+- **Auth:** `requireLogin()`, `ensureUserCanReadProject`
+- **Purpose:** Get all documents in a project (filtered from entities response)
+- **Note:** This uses the same endpoint as file tree but filters for document entities
+
+#### GET /project/:id/docs
+
+**Purpose:** Get all documents in a project
+
+**Request:**
+- Method: GET
+- URL: `/api/project/{project_id}/docs`
+- Auth: Session cookie required
+
+**Response:**
+```json
+{
+  "docs": [
+    {
+      "_id": "doc_id_string",
+      "name": "main.tex",
+      "folder": null or "folder_id",
+      "created": "2026-03-06T10:00:00.000Z",
+      "updated": "2026-03-06T12:00:00.000Z"
+    }
+  ]
+}
+```
+
+**Note:** The actual endpoint `/project/:Project_id/entities` returns both documents and files with a different format. For document listing only, filter the response:
+```json
+{
+  "project_id": "project_id_string",
+  "entities": [
+    {
+      "path": "/main.tex",
+      "type": "doc"
+    },
+    {
+      "path": "/images/figure1.png",
+      "type": "file"
+    }
+  ]
+}
+```
+
+**To get documents only:**
+1. Call `/project/:Project_id/entities`
+2. Filter entities where `type === "doc"`
+3. Extract document information from the paths
+- **Controller File:** `ProjectController.mjs` → `ProjectEntityHandler.getAllEntitiesFromProject()`
+
 #### Join Project (Editor Initialization)
 ```
 POST /project/:Project_id/join
