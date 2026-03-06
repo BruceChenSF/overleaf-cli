@@ -34,7 +34,9 @@
       "Bash(git show:*)",
       "Bash(if not exist \"C:\\\\Home\\\\CodeProjects\\\\overleaf-cc\\\\docs\" mkdir \"C:\\\\Home\\\\CodeProjects\\\\overleaf-cc\\\\docs\")",
       "Bash(git tag:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(test:*)",
+      "Bash(ls:*)"
     ]
   },
   "enabledPlugins": {

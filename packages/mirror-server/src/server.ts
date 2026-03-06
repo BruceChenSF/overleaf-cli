@@ -88,6 +88,7 @@ export class MirrorServer {
 
   private setupWebSocketServer(): void {
     this.wss.on('connection', (ws: WebSocket) => {
+      console.log('[Server] New connection established');
       const connection = new ClientConnection(ws, '');
 
       this.connections.set(ws, connection);
@@ -97,22 +98,27 @@ export class MirrorServer {
       });
 
       ws.on('close', () => {
+        console.log('[Server] Connection closed');
         this.connections.delete(ws);
       });
 
       connection.onMessage((message: WSMessage) => {
+        console.log('[Server] Message received:', message.type);
         this.handleMessage(connection, message);
       });
     });
   }
 
   private handleMessage(connection: ClientConnection, message: WSMessage): void {
+    console.log('[Server] Handling message type:', message.type);
+
     switch (message.type) {
       case 'mirror':
         console.log('Received mirror request:', message.api_endpoint);
         // Will be implemented in later tasks
         break;
       case 'edit_event':
+        console.log('[Server] Routing to edit_event handler');
         handleEditMonitor(message as EditEventMessage);
         break;
       case 'sync':
