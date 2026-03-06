@@ -13,7 +13,8 @@
     {
       "matches": ["https://*.overleaf.com/project/*", "https://*.cn.overleaf.com/project/*"],
       "js": ["dist/content.js"],
-      "run_at": "document_end"
+      "run_at": "document_start",
+      "all_frames": false
     }
   ],
   "background": {

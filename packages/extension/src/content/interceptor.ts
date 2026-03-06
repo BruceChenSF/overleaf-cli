@@ -7,12 +7,30 @@ import type { MirrorClient } from '../client';
 import type { APIRequest } from '../shared/types';
 
 interface InterceptorConfig {
-  client: MirrorClient;
+  client: MirrorClient | null;
   projectId: string;
 }
 
+// Global reference to the client (can be updated after connection)
+let globalClient: MirrorClient | null = null;
+let interceptorSetup = false;
+
 export function setupAPIInterceptor(config: InterceptorConfig): void {
   const { client, projectId } = config;
+
+  // Update global client reference
+  if (client) {
+    globalClient = client;
+    console.log('[Interceptor] Client updated');
+  }
+
+  // Only setup interceptors once
+  if (interceptorSetup) {
+    console.log('[Interceptor] Already setup, skipping');
+    return;
+  }
+
+  console.log('[Interceptor] Setting up interceptors for project:', projectId);
 
   // 1. Intercept fetch API
   const originalFetch = window.fetch;
@@ -24,25 +42,30 @@ export function setupAPIInterceptor(config: InterceptorConfig): void {
     if (shouldInterceptRequest(url)) {
       console.log('[Interceptor] ✅ Intercepting fetch request:', url);
 
-      try {
-        const request: APIRequest = {
-          url: typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
-          method: init?.method || 'GET',
-          body: init?.body ? JSON.parse(init.body as string) : undefined,
-          headers: init?.headers ? JSON.parse(JSON.stringify(init.headers)) : undefined,
-        };
+      // Only forward if we have a client connection
+      if (globalClient) {
+        try {
+          const request: APIRequest = {
+            url: typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
+            method: init?.method || 'GET',
+            body: init?.body ? JSON.parse(init.body as string) : undefined,
+            headers: init?.headers ? JSON.parse(JSON.stringify(init.headers)) : undefined,
+          };
 
-        await client.sendRequest({
-          type: 'mirror',
-          project_id: projectId,
-          api_endpoint: extractApiEndpoint(request.url),
-          method: request.method,
-          data: request.body,
-        });
+          globalClient.sendRequest({
+            type: 'mirror',
+            project_id: projectId,
+            api_endpoint: extractApiEndpoint(request.url),
+            method: request.method,
+            data: request.body,
+          });
 
-        console.log('[Interceptor] Successfully forwarded to mirror server');
-      } catch (error) {
-        console.error('[Interceptor] Failed to forward to mirror server:', error);
+          console.log('[Interceptor] Successfully forwarded to mirror server');
+        } catch (error) {
+          console.error('[Interceptor] Failed to forward to mirror server:', error);
+        }
+      } else {
+        console.log('[Interceptor] No client connection yet, skipping forward');
       }
     }
 
@@ -73,31 +96,36 @@ export function setupAPIInterceptor(config: InterceptorConfig): void {
     if (shouldInterceptRequest(url)) {
       console.log('[Interceptor] ✅ Intercepting XHR request:', url);
 
-      try {
-        const request: APIRequest = {
-          url: url,
-          method: this._method || 'GET',
-          body: body ? JSON.parse(body) : undefined,
-        };
+      if (globalClient) {
+        try {
+          const request: APIRequest = {
+            url: url,
+            method: this._method || 'GET',
+            body: body ? JSON.parse(body) : undefined,
+          };
 
-        client.sendRequest({
-          type: 'mirror',
-          project_id: projectId,
-          api_endpoint: extractApiEndpoint(request.url),
-          method: request.method,
-          data: request.body,
-        });
+          globalClient.sendRequest({
+            type: 'mirror',
+            project_id: projectId,
+            api_endpoint: extractApiEndpoint(request.url),
+            method: request.method,
+            data: request.body,
+          });
 
-        console.log('[Interceptor] Successfully forwarded XHR to mirror server');
-      } catch (error) {
-        console.error('[Interceptor] Failed to forward XHR to mirror server:', error);
+          console.log('[Interceptor] Successfully forwarded XHR to mirror server');
+        } catch (error) {
+          console.error('[Interceptor] Failed to forward XHR to mirror server:', error);
+        }
+      } else {
+        console.log('[Interceptor] No client connection yet, skipping XHR forward');
       }
     }
 
     return originalSend.apply(this, [body] as any);
   };
 
-  console.log('[Interceptor] XMLHttpRequest interception setup complete');
+  interceptorSetup = true;
+  console.log('[Interceptor] All interceptors setup complete');
 }
 
 function shouldInterceptRequest(url: string): boolean {
@@ -117,7 +145,6 @@ function extractApiEndpoint(fullUrl: string): string {
     const urlObj = new URL(fullUrl);
     return urlObj.pathname + urlObj.search;
   } catch {
-    // If URL parsing fails, return the full URL
     return fullUrl;
   }
 }
