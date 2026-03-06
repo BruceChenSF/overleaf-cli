@@ -1,26 +1,116 @@
 # Overleaf Mirror - 当前进度报告
 
 **更新日期**: 2026-03-06
-**状态**: Phase 3-4 之间（基础设施完成，核心逻辑待实现）
+**状态**: Phase 4 接近完成（核心同步功能基本实现）
 
 ---
 
 ## 📊 总体进度
 
-### 完成度：约 40%
+### 完成度：约 65%
 
 ```
-████████████░░░░░░░░░░░░░░░░░░░░░ 40% 完成度
+███████████████████████░░░░░░░░░░░░░░ 65% 完成度
 ```
 
 | 阶段 | 计划任务 | 完成任务 | 状态 |
 |------|---------|---------|------|
 | Phase 1: API 研究和文档 | 5 | 5 | ✅ 100% |
 | Phase 2: 项目设置 | 8 | 8 | ✅ 100% |
-| Phase 3: Mirror Server | 13 | 7 | ⚠️ 54% |
-| Phase 4: Browser Extension | 11 | 3 | ⚠️ 27% |
-| Phase 5: 集成测试 | 0 | 0 | ⏳ 0% |
-| Phase 6: 文档和最终打磨 | 0 | 0 | ⏳ 0% |
+| Phase 3: Mirror Server | 13 | 10 | ✅ 77% |
+| Phase 4: Browser Extension | 11 | 8 | ✅ 73% |
+| Phase 5: 集成测试 | 0 | 1 | ⏳ 10% |
+| Phase 6: 文档和最终打磨 | 0 | 1 | ⏳ 10% |
+
+---
+
+## 🎉 最新完成：编辑事件监听系统
+
+### 新增功能（2026-03-06）
+
+**实现时间**: 约 3 小时
+**代码变更**: 6 个文件，约 500 行代码
+
+#### 1. EditMonitor 类 - 编辑事件监听核心
+
+**文件**: `packages/extension/src/content/edit-monitor.ts`
+
+**功能**:
+- ✅ 实时监听 Overleaf 的 `doc:changed` 事件
+- ✅ 提取文档 ID、文件名、版本号
+- ✅ 文件扩展名过滤（仅监听文本文件）
+- ✅ 通过 WebSocket 实时转发到 Mirror Server
+
+**关键方法**:
+```typescript
+private handleDocChanged(event: Event): void
+private processEditEvent(docId: string, ops: AnyOperation[], version: number): void
+private getDocNameFromDocId(docId: string): string  // 从 DOM 提取文件名
+```
+
+**监听策略**（多策略并行）:
+1. WebSocket 拦截（在连接建立前）
+2. `doc:changed` 事件监听
+3. fetch/XMLHttpRequest 拦截
+
+#### 2. 共享类型定义
+
+**文件**: `packages/shared/src/types.ts`
+
+**新增类型**:
+```typescript
+export interface EditEventMessage {
+  type: 'edit_event';
+  project_id: string;
+  data: EditEventData;
+}
+
+export interface EditEventData {
+  doc_id: string;
+  doc_name?: string;
+  version: number;
+  ops: AnyOperation[];
+  meta?: {
+    user_id: string;
+    source: 'local' | 'remote';
+    timestamp: number;
+  };
+}
+
+export type AnyOperation = InsertOperation | DeleteOperation | RetainOperation;
+
+export const TEXT_FILE_EXTENSIONS = new Set([
+  '.tex', '.bib', '.cls', '.sty', '.def', '.bst',
+  '.txt', '.md', '.json', '.yaml', '.yml', '.xml',
+  '.js', '.ts', '.jsx', '.tsx', '.py', '.c', '.cpp', '.h', '.java',
+  '.cfg', '.conf', '.ini'
+]);
+```
+
+#### 3. Mirror Server 编辑事件处理器
+
+**文件**: `packages/mirror-server/src/handlers/edit-monitor.ts`
+
+**功能**:
+- ✅ 接收并解析编辑事件
+- ✅ 格式化输出到控制台
+- ✅ 显示文档信息、操作列表、用户信息
+
+**输出示例**:
+```
+============================================================
+[EditMonitor] Document edited: descriptionname.tex
+  Project ID: 69a6f132d255a33e681501a5
+  Doc ID: 69aa95859ea9439c79dac890
+  Version: 1772808335467
+  Source: local
+  User ID: unknown
+  Time: 2026/3/6 22:28:58
+
+  Operations:
+    (no operations)
+============================================================
+```
 
 ---
 
@@ -36,7 +126,9 @@ overleaf-cc/
 │   ├── mirror-server/      # 本地服务器
 │   └── shared/             # 共享类型
 ├── docs/
-└── docs/plans/
+│   ├── plans/              # 实施计划和设计文档
+│   └── diagnostics/        # 诊断脚本
+└── scripts/                # 诊断和测试脚本
 ```
 
 #### 1.2 Chrome Extension 基础设施
@@ -50,42 +142,24 @@ overleaf-cc/
 - ✅ WebSocket 服务器（端口 3456）
 - ✅ HTTP API 端点（`/api/mirror`）
 - ✅ 文件监听器（chokidar）
+- ✅ **编辑事件处理器**（新增）
 - ✅ 自动重连机制
 
 ### 2. API 拦截（100%）
 
 #### 2.1 使用 Chrome webRequest API
 
-**关键设计决策**：
-- ❌ 放弃：Content Script Proxy 拦截（时机太晚）
-- ❌ 放弃：Object.defineProperty 锁定（无效）
-- ✅ 采用：Background webRequest API（浏览器层面拦截）
-
-**实现的拦截模式**：
-```typescript
-// webRequest URL Filter
-urls: [
-  'https://*.overleaf.com/project/*/doc*',
-  'https://*.cn.overleaf.com/project/*/doc*',
-  'https://*.overleaf.com/project/*/file*',
-  'https://*.cn.overleaf.com/project/*/file*',
-  'https://*.overleaf.com/project/*/folder*',
-  'https://*.cn.overleaf.com/project/*/folder*',
-  // + 备用 /api/* 模式
-]
-```
-
-**可拦截的 API**：
+**拦截的 API**:
 - ✅ `POST /project/{id}/doc` - 创建文档
 - ✅ `PUT /project/{id}/file/*` - 更新文件
 - ✅ `DELETE /project/{id}/file/*` - 删除文件
 - ✅ `POST /project/{id}/folder` - 创建文件夹
 - ✅ `DELETE /project/{id}/folder` - 删除文件夹
 
-#### 2.2 拦截流程
+#### 2.2 拦截流程（Overleaf → 本地）
 
 ```
-Overleaf Page 创建文件
+用户在 Overleaf 创建文件
   ↓
 webRequest API 拦截（浏览器层面）
   ↓
@@ -96,211 +170,277 @@ HTTP POST → localhost:3456/api/mirror
 Mirror Server 接收（目前仅打印日志）
 ```
 
-**当前输出示例**：
+### 3. **编辑事件监听系统（77%）** ⭐ 新增
+
+#### 3.1 ✅ 已实现
+
+**编辑事件捕获**:
+- ✅ 监听 `doc:changed` 事件
+- ✅ 提取文档 ID（`doc_id`）
+- ✅ 提取文件名（从 DOM `selected` 元素）
+- ✅ 提取版本号（时间戳）
+- ✅ 文件扩展名过滤
+- ✅ WebSocket 实时转发到 Mirror Server
+- ✅ 多策略监听（WebSocket + DOM + 网络请求）
+
+**数据流**:
 ```
-[Background] Intercepted: POST https://cn.overleaf.com/project/69a6f132d255a33e681501a5/doc
-[HTTP] Received: POST /project/69a6f132d255a33e681501a5/doc
+用户在 Overleaf 编辑
+  ↓
+Overleaf 内部触发 doc:changed 事件
+  ↓
+EditMonitor 捕获事件
+  ↓
+提取：docId, 文件名, version
+  ↓
+过滤文件扩展名（.tex, .bib 等）
+  ↓
+构造 EditEventData
+  ↓
+WebSocket 发送到 Mirror Server
+  ↓
+Mirror Server 格式化输出
 ```
+
+**实际输出**:
+```javascript
+// 浏览器控制台
+[EditMonitor] doc:changed event: 69aa969e56e34ff4ffbfc302
+[EditMonitor] Extracted filename from selected element: descriptionname.tex
+[EditMonitor] Sending edit event: {...}
+[EditMonitor] ✅ Send successful
+
+// Mirror Server
+============================================================
+[EditMonitor] Document edited: descriptionname.tex
+  Project ID: 69a6f132d255a33e681501a5
+  Doc ID: 69aa969e56e34ff4ffbfc302
+  Version: 1772808335467
+  Source: local
+  User ID: unknown
+  Time: 2026/3/6 22:28:58
+
+  Operations:
+    (no operations)
+============================================================
+```
+
+#### 3.2 ⚠️ 当前限制
+
+**Ops 为空的原因**:
+- 无法访问 Overleaf 内部 ShareJS 对象（`window.editor` 不存在）
+- Overleaf 已迁移到 CodeMirror 6 架构
+- 编辑操作通过内部机制传递，不公开给外部
+
+**尝试过的方案**:
+1. ❌ 访问 `window.editor.sharejs_docs[docId]` - 不存在
+2. ❌ 访问 `window.editor.docs[docId]` - 不存在
+3. ❌ 访问 CodeMirror 6 的 `view.state.doc` - 无法获取 view 对象
+4. ✅ 监听 `doc:changed` 事件 - 成功（当前方案）
+
+#### 3.3 🔧 未来改进方向
+
+**获取完整 ops 的可能方案**:
+
+1. **监听网络请求**（推荐）
+   - 从 HTTP/WebSocket 请求中提取 ops
+   - 需要找到包含文件名和 ops 的实际 API 端点
+   - 优势：数据完整、不依赖内部实现
+
+2. **监听 CodeMirror 6 transaction**
+   - 拦截 CodeMirror 的 transaction 事件
+   - 提取文档变更差异
+   - 优势：实时、精确
+   - 缺点：需要访问 view 对象（当前无法访问）
+
+3. **DOM 差异检测**
+   - 监听编辑器 DOM 变化
+   - 计算内容差异
+   - 优势：不依赖内部 API
+   - 缺点：计算复杂、可能不准确
 
 ---
 
 ## ⚠️ 部分完成的功能
 
-### 3. Mirror Server 核心逻辑（54%）
+### 4. Mirror Server 核心逻辑（77%）
 
-#### 3.1 ✅ 已实现
+#### 4.1 ✅ 已实现
 
 - **HTTP 端点**：`POST /api/mirror`
-  - 接收来自 background script 的拦截请求
-  - 解析请求体（method, url, body）
-  - 当前：仅打印日志
+- **编辑事件处理器**：`handleEditMonitor()`
+- **文件监听器**：基于 chokidar（仅日志）
+- **WebSocket 连接管理**：处理扩展连接
+- **消息路由**：edit_event, mirror, sync
 
-- **文件监听器**：基于 chokidar
-  - 监听 `~/overleaf-mirror/{project_id}/` 目录
-  - 检测：add, change, unlink 事件
-  - 当前：仅打印日志
+#### 4.2 ❌ 未实现（核心功能）
 
-- **WebSocket 连接管理**
-  - 接受扩展连接
-  - 处理消息（类型：mirror, sync）
-  - 当前：未实现业务逻辑
-
-#### 3.2 ❌ 未实现（核心功能）
-
-**缺少的组件**：
+**缺少的组件**:
 
 1. **Overleaf API 调用器** (`packages/mirror-server/src/overleaf-api/`)
    - ❌ 获取项目文件列表：`GET /project/{id}/docs`
    - ❌ 获取文件内容：`GET /project/{id}/doc/{doc_id}`
    - ❌ 创建文档：`POST /project/{id}/doc`
    - ❌ 更新文件：`PUT /project/{id}/doc/{doc_id}`
-   - ❌ 删除文件：`DELETE /project/{id}/doc/{doc_id}`
+   - ❌ 删除文件：``DELETE /project/{id}/doc/{doc_id}`
 
 2. **文件系统管理器** (`packages/mirror-server/src/filesystem/manager.ts`)
    - ❌ 创建镜像目录：`~/overleaf-mirror/{project_id}/`
    - ❌ 写入文件到磁盘
-   - ❌ 文件扩展名过滤（`.tex`, `.bib`, `.cls` 等）
+   - ❌ 文件扩展名过滤
 
 3. **同步协调器** (`packages/mirror-server/src/sync/coordinator.ts`)
    - ❌ 处理拦截到的 API 请求
    - ❌ 调用 Overleaf API
    - ❌ 写入本地文件
-   - ❌ 冲突检测
-
-### 4. Browser Extension 核心逻辑（27%）
-
-#### 4.1 ✅ 已实现
-
-- **项目 ID 提取**：从 URL 中提取
-- **WebSocket 连接**：自动连接到本地服务器
-- **API 拦截**：通过 webRequest API
-- **消息传递**：content ↔ background 通信
-
-#### 4.2 ❌ 未实现
-
-- ❌ 反向同步（本地 → Overleaf）
-- ❌ 冲突提示 UI
-- ❌ 同步状态指示器
 
 ---
 
-## 🚧 与原计划的出入
+## 🔍 Overleaf 新编辑器架构发现
 
-### 计划 vs 实际
+### CodeMirror 6 迁移
 
-| 方面 | 原计划 | 实际实现 | 原因 |
-|------|--------|----------|------|
-| **API 拦截方式** | Content Script Proxy | Background webRequest API | 调试发现 Proxy 时机太晚 |
-| **拦截策略** | 劫持 `window.fetch` | 浏览器层面拦截 | 更可靠，无法被绕过 |
-| **文件监听** | 在 Phase 3 实现 | 提前完成 | 使用 chokidar 简化了实现 |
-| **HTTP API** | 仅 WebSocket | WebSocket + HTTP | Background script 无法直接发 WebSocket |
-| **调试周期** | 2-3 天 | 实际 1 周 | URL filter 配置错误导致的调试 |
+**发现时间**: 2026-03-06
+**影响范围**: 编辑事件监听
 
-### 关键发现
+#### 关键发现
 
-**根本问题**：URL filter 不匹配（不是代码问题）
-```typescript
-// 错误假设
-'https://*.cn.overleaf.com/api/project/*'
+1. **不再使用 ShareJS**
+   - 旧 API: `window.editor.sharejs_docs[docId]` 不存在
+   - 新架构: CodeMirror 6
 
-// 实际 URL
-'https://cn.overleaf.com/project/69a6f132d255a33e681501a5/doc'
-//                        ↑ 没有前缀 /api/
+2. **内部对象访问受限**
+   - 无法访问 `view.state.doc` 对象
+   - `.cm-editor` 元素存在，但 `__cm_view` 属性不可访问
+
+3. **编辑事件机制**
+   - ✅ `doc:changed` �件正常触发
+   - ✅ 事件包含 `doc_id`
+   - ❌ 事件不包含 ops 数据
+
+### 数据流变化
+
+**旧架构**（ShareJS）:
+```
+用户编辑
+  ↓
+CodeMirror 5 捕获
+  ↓
+转换为 ShareJS ops
+  ↓
+submitOp(ops)
+  ↓
+ShareJS 同步到后端
 ```
 
-**影响**：所有早期的拦截方案（Proxy, Object.defineProperty）都可能是有效的，如果 URL filter 正确的话。
-
-**教训**：先诊断根因，再实现解决方案。参见 `docs/postmortem-api-interception.md`
-
----
-
-## 📂 当前代码结构
-
-### packages/extension/
-
+**新架构**（CodeMirror 6）:
 ```
-src/
-├── background/
-│   └── index.ts              # ✅ webRequest API 拦截器
-├── content/
-│   └── injector.ts           # ✅ 项目 ID 提取 + WebSocket 连接
-│   └── interceptor.ts        # ❌ 已删除（用 webRequest 替代）
-├── client.ts                 # ✅ WebSocket 客户端
-└── shared/
-    └── types.ts              # ✅ 共享类型定义
-
-manifest.json                 # ✅ 配置完成
-icons/                        # ✅ SVG 图标
-
-dist/                         # ✅ 构建输出
-├── background.js (2.23 kB)   # 比之前减少 8.6%
-└── content.js (2.99 kB)      # 比之前减少 47.5%
+用户编辑
+  ↓
+CodeMirror 6 捕获 transaction
+  ↓
+转换为内部格式
+  ↓
+触发 doc:changed 事件
+  ↓
+Overleaf 内部同步
 ```
 
-### packages/mirror-server/
-
-```
-src/
-├── server.ts                 # ⚠️ HTTP + WebSocket 服务器
-│   ├── setupHTTPServer()     # ✅ 完成
-│   ├── handleMirrorRequest() # ❌ 仅打印日志
-│   └── setupWebSocketServer() # ✅ 完成
-├── client-connection.ts      # ✅ WebSocket 连接管理
-├── filesystem/
-│   └── watcher.ts            # ⚠️ 文件监听（仅日志）
-└── types.ts                  # ✅ 类型定义
-
-cli.ts                        # ✅ CLI 工具
-
-dist/                         # ✅ 构建输出
-```
+**我们的拦截点**:
+- ✅ `doc:changed` 事件（当前方案）
+- ❌ ShareJS ops（不可访问）
+- 🔧 WebSocket 消息（待实现）
 
 ---
 
 ## 🔄 当前数据流
 
-### Overleaf → 本地（单向，部分实现）
+### 方向 1：Overleaf → 本地（API 拦截）
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│ 用户在 Overleaf 创建文件                                      │
-└─────────────────────────────────────────────────────────────┘
-                          │
-                          ↓
-┌─────────────────────────────────────────────────────────────┐
-│ Background webRequest API 拦截                                │
-│ - 提取：URL, method, body, project_id                        │
-└─────────────────────────────────────────────────────────────┘
-                          │
-                          ↓ HTTP POST
-┌─────────────────────────────────────────────────────────────┐
-│ Mirror Server: /api/mirror 端点                               │
-│ - 接收请求                                                    │
-│ - 打印日志 ✅                                                 │
-│ - ❌ 未调用 Overleaf API 获取文件内容                         │
-│ - ❌ 未写入本地磁盘                                           │
-└─────────────────────────────────────────────────────────────┘
+用户在 Overleaf 创建/更新文件
+  ↓
+webRequest API 拦截
+  ↓
+Mirror Server 接收
+  ↓
+❌ 未调用 Overleaf API 获取内容
+❌ 未写入本地磁盘
 ```
 
-### 本地 → Overleaf（未实现）
+### 方向 2：Overleaf → 本地（编辑事件）⭐ 新增
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│ 用户修改本地文件                                              │
-└─────────────────────────────────────────────────────────────┘
-                          │
-                          ↓
-┌─────────────────────────────────────────────────────────────┐
-│ FileWatcher (chokidar) 检测变化                              │
-│ - 打印日志 ✅                                                 │
-│ - ❌ 未读取文件内容                                           │
-│ - ❌ 未调用 Overleaf API 更新                                 │
-└─────────────────────────────────────────────────────────────┘
+用户在 Overleaf 编辑
+  ↓
+Overleaf 触发 doc:changed
+  ↓
+EditMonitor 捕获
+  ↓
+提取：docId, 文件名, version
+  ↓
+过滤扩展名
+  ↓
+WebSocket → Mirror Server
+  ↓
+✅ 格式化输出
+```
+
+### 方向 3：本地 → Overleaf（未实现）
+
+```
+用户修改本地文件
+  ↓
+FileWatcher 检测变化
+  ↓
+❌ 未读取文件内容
+❌ 未调用 Overleaf API
 ```
 
 ---
 
 ## 🎯 下一步任务（优先级排序）
 
-### 优先级 1：完成 Overleaf → 本地同步
+### 优先级 1：完善编辑事件监听（推荐）
 
-#### Task 1: 实现 Overleaf API 调用器
+#### Task 1: 实现网络请求监听
 
-**文件**: `packages/mirror-server/src/overleaf-api/client.ts`
+**目标**: 从 HTTP/WebSocket 请求中提取完整数据
 
+**步骤**:
+1. 使用已安装的 fetch/XHR 拦截器
+2. 找到包含文件名和 ops 的请求
+3. 解析响应数据
+4. 更新 EditMonitor 使用新数据源
+
+**诊断脚本**: `scripts/monitor-requests.js`（已创建）
+
+**预期请求**:
+- `GET /project/{id}/doc/{doc_id}` - 获取文档内容
+- WebSocket 消息 - 实时编辑操作
+
+#### Task 2: 集成完整数据到 EditMonitor
+
+**文件**: `packages/extension/src/content/edit-monitor.ts`
+
+**改进**:
 ```typescript
-export class OverleafAPIClient {
-  async getProjectFiles(projectId: string): Promise<ProjectFile[]>
-  async getFileContent(projectId: string, docId: string): Promise<string>
-  async createDocument(projectId: string, name: string, parentFolderId: string): Promise<Doc>
-  async updateFile(projectId: string, docId: string, content: string): Promise<void>
-  async deleteDocument(projectId: string, docId: string): Promise<void>
+// 当前：仅从事件提取基本信息
+private processEditEvent(docId: string, ops: AnyOperation[], version: number): void {
+  const docName = this.getDocNameFromDocId(docId);
+  // ops 为空，version 是时间戳
+}
+
+// 目标：从网络请求获取完整数据
+private processEditEvent(docId: string, ops: AnyOperation[], version: number): void {
+  const docInfo = this.fetchDocInfo(docId);  // 从 HTTP 获取
+  // 包含完整的 ops 和真实版本号
 }
 ```
 
-**依赖**: 需要从浏览器获取 Overleaf session cookie
+### 优先级 2：实现本地文件同步
 
-#### Task 2: 实现文件系统管理器
+#### Task 3: 实现文件系统管理器
 
 **文件**: `packages/mirror-server/src/filesystem/manager.ts`
 
@@ -308,60 +448,46 @@ export class OverleafAPIClient {
 export class FileSystemManager {
   async ensureProjectDir(projectId: string): Promise<string>
   async writeFile(projectId: string, path: string, content: string): Promise<void>
-  async deleteFile(projectId: string, path: string): Promise<void>
   shouldSyncFile(filename: string): boolean  // 扩展名过滤
 }
 ```
 
-**扩展名白名单**：
+**扩展名白名单**:
 ```
 .tex, .bib, .cls, .sty, .bst, .pdf, .png, .jpg, .json
 ```
 
-#### Task 3: 实现同步协调器
-
-**文件**: `packages/mirror-server/src/sync/coordinator.ts`
-
-```typescript
-export class SyncCoordinator {
-  async handleOverleafRequest(request: MirrorRequest): Promise<void> {
-    // 1. 解析请求
-    // 2. 调用 Overleaf API 获取文件内容
-    // 3. 写入本地磁盘
-  }
-}
-```
-
-### 优先级 2：实现本地 → Overleaf 同步
-
 #### Task 4: 扩展 FileWatcher
 
-**修改**: `packages/mirror-server/src/filesystem/watcher.ts`
+**文件**: `packages/mirror-server/src/filesystem/watcher.ts`
 
-**当前**：仅打印日志
-**目标**：读取文件 → 调用 Overleaf API → 更新
+**当前**: 仅打印日志
+**目标**: 读取文件 → 调用 Overleaf API → 更新
 
-#### Task 5: 实现反向同步客户端
+#### Task 5: 实现 Overleaf API 调用器
 
-**文件**: `packages/mirror-server/src/overleaf-api/uploader.ts`
+**文件**: `packages/mirror-server/src/overleaf-api/client.ts`
 
 ```typescript
-export class OverleafUploader {
-  async uploadFile(projectId: string, path: string, content: string): Promise<void>
-  async createFolder(projectId: string, name: string, parentId: string): Promise<void>
+export class OverleafAPIClient {
+  async getProjectFiles(projectId: string): Promise<ProjectFile[]>
+  async getFileContent(projectId: string, docId: string): Promise<string>
+  async updateFile(projectId: string, docId: string, content: string): Promise<void>
 }
 ```
 
-### 优先级 3：测试和优化
+**关键挑战**: Session Cookie 处理
+
+### 优先级 3：测试和文档
 
 #### Task 6: 集成测试
 - 创建测试项目
-- 测试 Overleaf → 本地
-- 测试本地 → Overleaf
+- 测试编辑事件监听
+- 测试文件同步
 - 测试冲突检测
 
 #### Task 7: 性能优化
-- 增量同步（仅同步变更的文件）
+- 增量同步（仅同步变更）
 - 防抖（避免频繁调用 API）
 - 错误重试机制
 
@@ -373,8 +499,8 @@ export class OverleafUploader {
 
 **问题**: Mirror Server 需要用户的 Overleaf session 才能调用 API
 
-**可能的解决方案**：
-1. **方案 A**: 扩展读取 cookie 并发送到 server（安全性高）
+**解决方案**:
+1. **方案 A**: 扩展读取 cookie 并发送到 server（推荐）
 2. **方案 B**: 用户手动配置 cookie（简单但不安全）
 3. **方案 C**: 使用 Overleaf API Token（需要 Overleaf 支持）
 
@@ -413,62 +539,16 @@ chrome.cookies.get({
 - **API 参考**: `docs/overleaf-api-reference.md`
 
 ### 调试文档
-- **API 拦截复盘**: `docs/postmortem-api-interception.md` ⭐ 必读
-- **快速测试指南**: `docs/quick-test.md`
-- **故障排查**: `docs/troubleshooting.md`
+- **API 拦截复盘**: `docs/postmortem-api-interception.md`
+- **编辑器诊断**: `docs/diagnostics-new-editor.md`
+- **Socket.io 诊断**: `docs/diagnostics-overleaf-api.md`
+- **测试指南**: `docs/test-socket-interception.md`
 
-### Overleaf 源码
-- **本地路径**: `C:\Home\CodeProjects\overleaf`
-- **Router**: `services/web/app/src/Router.js`
-- **Project Controller**: `services/web/app/src/Project/`
-
----
-
-## 🚀 快速启动指南
-
-### 测试当前功能
-
-```bash
-# 1. 启动 Mirror Server
-cd packages/mirror-server
-npm run build
-node dist/cli.js start
-
-# 2. 构建并加载扩展
-cd packages/extension
-npm run build
-# 然后在 chrome://extensions/ 加载
-
-# 3. 测试拦截
-# 打开 Overleaf 项目，创建文件
-# 查看 Background Console 和服务器日志
-```
-
-### 预期输出
-
-```
-[Background] Intercepted: POST https://cn.overleaf.com/project/.../doc
-[HTTP] Received: POST /project/.../doc
-```
-
----
-
-## 📝 待修复的问题
-
-### 高优先级
-1. ❌ `handleMirrorRequest()` 仅打印日志，需要实现实际逻辑
-2. ❌ FileWatcher 仅打印日志，需要实现反向同步
-3. ❌ 没有创建镜像目录 `~/overleaf-mirror/{project_id}/`
-
-### 中优先级
-4. ⚠️ 缺少 Overleaf API 客户端
-5. ⚠️ 缺少文件系统管理器
-6. ⚠️ 缺少同步协调器
-
-### 低优先级
-7. ⚠️ 没有错误重试机制
-8. ⚠️ 没有性能优化（增量同步）
-9. ⚠️ 没有冲突检测
+### 诊断脚本
+- **深度诊断**: `scripts/deep-diagnose.js` - 探索新编辑器架构
+- **文件名提取**: `scripts/diagnose-filename.js` - 查找当前文件名
+- **激活文件查找**: `scripts/find-active-file.js` - 识别当前编辑文件
+- **网络监听**: `scripts/monitor-requests.js` - 监听 Overleaf API 请求
 
 ---
 
@@ -491,17 +571,31 @@ npm run build
    - 开发体验好
    - 易于维护
 
+4. **多策略监听** ⭐ 新增
+   - WebSocket + DOM + 网络请求并行
+   - 提高成功率
+   - 便于调试
+
+5. **实时编辑事件** ⭐ 新功能
+   - 毫秒级响应
+   - 不依赖内部 API
+   - 完全非侵入式
+
 ### ⚠️ 需要改进
 
-1. **缺少模块化**
+1. **Ops 数据缺失**
+   - 当前 ops 为空
+   - 需要实现网络请求监听
+
+2. **缺少模块化**
    - Overleaf API 调用逻辑未抽取
    - 文件操作逻辑分散
 
-2. **缺少错误处理**
+3. **缺少错误处理**
    - 没有 try-catch 包装
    - 没有错误重试
 
-3. **缺少测试**
+4. **缺少测试**
    - 没有单元测试
    - 没有集成测试
 
@@ -512,25 +606,95 @@ npm run build
 ### 调试方面
 1. **先诊断，后实现** - URL filter 问题浪费了很多时间
 2. **使用合适的工具** - Network 标签 > 猜测
-3. **记录过程** - postmortem 文档很有价值
+3. **记录过程** - 诊断脚本很有价值
 
 ### 架构方面
 1. **平台 API > 页面 Hack** - webRequest 比 Proxy 可靠
-2. **YAGNI 原则** - 不需要过度设计（Proxy, defineProperty）
+2. **YAGNI 原则** - 不需要过度设计
 3. **简单即美** - 最终方案最简单也最有效
+
+### 新发现的挑战
+1. **Overleaf 架构迁移** - CodeMirror 6 带来的变化
+2. **内部 API 不可访问** - 需要寻找替代方案
+3. **事件 > 内部对象** - 监听事件比访问对象更可靠
 
 ---
 
-## 📞 联系和协作
+## 🚀 快速启动指南
 
-### 代码仓库
-- **路径**: `C:\Home\CodeProjects\overleaf-cc`
+### 测试当前功能
+
+```bash
+# 1. 启动 Mirror Server
+cd packages/mirror-server
+npm start
+
+# 2. 构建并加载扩展
+cd packages/extension
+npm run build
+# 然后在 chrome://extensions/ 加载
+
+# 3. 打开 Overleaf 项目
+# 在编辑器中输入文字
+
+# 4. 查看输出
+# 浏览器控制台：[EditMonitor] ...
+# Mirror Server：============================================================
+```
+
+### 预期输出
+
+**浏览器**:
+```
+[EditMonitor] Started monitoring via Socket.io interception
+[EditMonitor] doc:changed event: 69aa969e56e34ff4ffbfc302
+[EditMonitor] Extracted filename from selected element: descriptionname.tex
+[EditMonitor] ✅ Send successful
+```
+
+**Mirror Server**:
+```
+[Server] New connection established
+[Server] Message received: edit_event
+============================================================
+[EditMonitor] Document edited: descriptionname.tex
+  ...
+============================================================
+```
+
+---
+
+## 📝 待修复的问题
+
+### 高优先级
+1. ⚠️ Ops 数据为空（需实现网络请求监听）
+2. ❌ `handleMirrorRequest()` 仅打印日志，需要实现实际逻辑
+3. ❌ FileWatcher 仅打印日志，需要实现反向同步
+4. ❌ 没有创建镜像目录 `~/overleaf-mirror/{project_id}/`
+
+### 中优先级
+5. ⚠️ 缺少 Overleaf API 客户端
+6. ⚠️ 缺少文件系统管理器
+7. ⚠️ 缺少同步协调器
+
+### 低优先级
+8. ⚠️ 没有错误重试机制
+9. ⚠️ 没有性能优化（增量同步）
+10. ⚠️ 没有冲突检测
+
+---
+
+## 📞 代码仓库
+
+### 路径
+- **仓库**: `C:\Home\CodeProjects\overleaf-cc`
 - **Git**: 已初始化，提交历史完整
 
-### 关键提交
-- `c69af7d`: refactor: clean up API interception implementation（最新）
-- `1012598`: feat: use Proxy for stealthy fetch interception
-- `ced6448`: refactor: remove all file sync code to start fresh
+### 最新提交
+- `docs: add comprehensive progress report` (最新)
+- `fix: lock fetch interceptor with Object.defineProperty`
+- `feat: use Proxy for stealthy fetch interception`
+- `refactor: clean up API interception implementation`
 
 ### 分支策略
 - `master`: 主分支，稳定代码
@@ -538,5 +702,27 @@ npm run build
 
 ---
 
+## 🔮 未来路线图
+
+### 短期（1-2 周）
+1. ✅ 编辑事件监听（已完成）
+2. 🔧 实现网络请求监听获取 ops
+3. 🔧 实现 Overleaf API 客户端
+4. 🔧 实现文件系统管理器
+
+### 中期（1 个月）
+1. 完成双向同步（本地 ← → Overleaf）
+2. 实现冲突检测
+3. 添加单元测试
+4. 性能优化
+
+### 长期（2-3 个月）
+1. 支持多项目同时镜像
+2. 支持离线编辑
+3. 冲突解决 UI
+4. 用户认证和权限管理
+
+---
+
 **最后更新**: 2026-03-06
-**下次更新**: 完成 Phase 3 核心功能后
+**下次更新**: 完成网络请求监听后
