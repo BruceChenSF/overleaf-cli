@@ -1,0 +1,17 @@
+{
+  "name": "@overleaf-cc/shared",
+  "version": "1.0.0",
+  "description": "Shared types and utilities for Overleaf Mirror system",
+  "main": "dist/types.js",
+  "types": "dist/types.d.ts",
+  "scripts": {
+    "prebuild": "rimraf dist",
+    "build": "tsc",
+    "prepublishOnly": "npm run build",
+    "dev": "tsc --watch"
+  },
+  "devDependencies": {
+    "rimraf": "^5.0.5",
+    "typescript": "^5.3.3"
+  }
+}
