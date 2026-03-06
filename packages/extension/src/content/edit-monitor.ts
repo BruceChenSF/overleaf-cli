@@ -29,6 +29,7 @@ export class EditMonitor {
   private editorView: any | null = null;
   private mutationObserver: MutationObserver | null = null;
   private readonly DETECTION_TIMEOUT = 5000; // 5秒超时
+  private fallbackInterval: number | null = null;
 
   constructor(projectId: string, mirrorClient: MirrorClient) {
     this.projectId = projectId;
@@ -135,6 +136,12 @@ export class EditMonitor {
       this.mutationObserver = null;
     }
 
+    // 停止 fallback listener
+    if (this.fallbackInterval) {
+      clearInterval(this.fallbackInterval);
+      this.fallbackInterval = null;
+    }
+
     // 清理 EditorView 引用
     this.editorView = null;
 
@@ -207,11 +214,124 @@ export class EditMonitor {
 
     console.log('[EditMonitor] Setting up transaction listener...');
 
-    // TODO: 实现实际的监听器注册
-    // 这需要根据 CodeMirror 6 的实际 API 来实现
-    // 可能需要劫持 EditorState 或者使用插件系统
+    try {
+      // 方式 1: 劫持 view.dispatch 方法
+      const originalDispatch = this.editorView.dispatch.bind(this.editorView);
+      const self = this; // 保存 this 引用
 
-    console.log('[EditMonitor] Transaction listener setup complete');
+      this.editorView.dispatch = function(...args) {
+        // 调用原始方法
+        const result = originalDispatch(...args);
+
+        // 处理 transaction
+        if (args[0] && args[0].transactions) {
+          args[0].transactions.forEach((tr: Transaction) => {
+            // 使用箭头函数保持 'this' 绑定
+            if (tr.docChanged) {
+              try {
+                self.handleTransaction(tr);
+              } catch (error) {
+                console.error('[EditMonitor] Error in transaction handler:', error);
+              }
+            }
+          });
+        }
+
+        return result;
+      };
+
+      console.log('[EditMonitor] Dispatch method hooked successfully');
+
+    } catch (error) {
+      console.error('[EditMonitor] Failed to setup transaction listener:', error);
+      console.log('[EditMonitor] Will use fallback monitoring method');
+      this.setupFallbackListener();
+    }
+  }
+
+  /**
+   * 设置备用监听器（轮询模式）
+   *
+   * 当 dispatch 劫持失败时，使用定期轮询检测内容变化。
+   *
+   * @private
+   */
+  private setupFallbackListener(): void {
+    if (!this.editorView) return;
+
+    let lastContent = this.editorView.state.doc.toString();
+
+    // 定期检查文档内容变化
+    this.fallbackInterval = setInterval(() => {
+      if (!this.monitoring) {
+        clearInterval(this.fallbackInterval!);
+        return;
+      }
+
+      try {
+        const currentContent = this.editorView!.state.doc.toString();
+
+        if (currentContent !== lastContent) {
+          console.log('[EditMonitor] Content changed (fallback mode)');
+
+          // 计算差异（简化版）
+          const ops = this.calculateDiffOps(lastContent, currentContent);
+          if (ops.length > 0) {
+            this.sendEditEvent(ops, 'local');
+          }
+
+          lastContent = currentContent;
+        }
+      } catch (error) {
+        console.error('[EditMonitor] Error in fallback listener:', error);
+      }
+    }, 500); // 每 500ms 检查一次
+
+    console.log('[EditMonitor] Fallback listener started (polling every 500ms)');
+  }
+
+  /**
+   * 计算两个文本之间的差异（简化版）
+   *
+   * @param oldContent - 旧文本内容
+   * @param newContent - 新文本内容
+   * @returns ShareJS ops 数组
+   * @private
+   */
+  private calculateDiffOps(oldContent: string, newContent: string): AnyOperation[] {
+    const ops: AnyOperation[] = [];
+
+    // 简化的差异检测：找到第一个不同的位置
+    let i = 0;
+    while (i < oldContent.length && i < newContent.length && oldContent[i] === newContent[i]) {
+      i++;
+    }
+
+    // 找到最后一个不同的位置
+    let oldEnd = oldContent.length;
+    let newEnd = newContent.length;
+    while (oldEnd > i && newEnd > i && oldContent[oldEnd - 1] === newContent[newEnd - 1]) {
+      oldEnd--;
+      newEnd--;
+    }
+
+    // 生成删除操作
+    if (oldEnd > i) {
+      ops.push({
+        p: i,
+        d: oldContent.substring(i, oldEnd)
+      });
+    }
+
+    // 生成插入操作
+    if (newEnd > i) {
+      ops.push({
+        p: i,
+        i: newContent.substring(i, newEnd)
+      });
+    }
+
+    return ops;
   }
 
   /**
