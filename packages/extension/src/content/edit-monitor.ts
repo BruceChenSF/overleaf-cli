@@ -30,6 +30,53 @@ export class EditMonitor {
   }
 
   /**
+   * 立即查找 EditorView 实例
+   *
+   * 尝试从已存在的 DOM 元素中获取 EditorView。
+   *
+   * @returns EditorView | null
+   * @private
+   */
+  private findEditorViewImmediate(): any | null {
+    // 方法 1: 通过 .cm-content.cmView.view（用户验证的路径）
+    const cmContent = document.querySelector('.cm-content');
+    const view = (cmContent as any)?.cmView?.view;
+
+    if (view && this.validateEditorView(view)) {
+      console.log('[EditMonitor] Found EditorView via .cm-content.cmView.view');
+      return view;
+    }
+
+    // 方法 2: 尝试其他可能的路径（备用）
+    const cmEditor = document.querySelector('.cm-editor');
+    const altView = (cmEditor as any)?.__cm_view || (cmEditor as any)?.cmView;
+
+    if (altView && this.validateEditorView(altView)) {
+      console.log('[EditMonitor] Found EditorView via .cm-editor.__cm_view');
+      return altView;
+    }
+
+    return null;
+  }
+
+  /**
+   * 验证 EditorView 实例的有效性
+   *
+   * @param view - 待验证的对象
+   * @returns boolean
+   * @private
+   */
+  private validateEditorView(view: any): boolean {
+    return (
+      view &&
+      typeof view.state === 'object' &&
+      typeof view.dispatch === 'function' &&
+      typeof view.state.doc === 'object' &&
+      typeof view.state.doc.toString === 'function'
+    );
+  }
+
+  /**
    * 启动编辑监听
    *
    * 检测 CodeMirror 6 EditorView 实例并设置监听器。
@@ -98,7 +145,44 @@ export class EditMonitor {
    * @private
    */
   private detectEditorView(): Promise<any | null> {
-    // TODO: 实现检测逻辑
-    return Promise.resolve(null);
+    return new Promise((resolve) => {
+      // 阶段 1: 立即检查
+      const immediateView = this.findEditorViewImmediate();
+      if (immediateView) {
+        resolve(immediateView);
+        return;
+      }
+
+      console.log('[EditMonitor] EditorView not found immediately, starting MutationObserver...');
+
+      // 阶段 2: 启动 MutationObserver
+      const observer = new MutationObserver(() => {
+        const view = this.findEditorViewImmediate();
+        if (view) {
+          console.log('[EditMonitor] EditorView detected via MutationObserver');
+          observer.disconnect();
+          this.mutationObserver = null;
+          resolve(view);
+        }
+      });
+
+      // 监听整个 document.body
+      observer.observe(document.body, {
+        childList: true,
+        subtree: true
+      });
+
+      this.mutationObserver = observer;
+
+      // 阶段 3: 超时处理
+      setTimeout(() => {
+        if (this.mutationObserver) {
+          observer.disconnect();
+          this.mutationObserver = null;
+          console.warn('[EditMonitor] EditorView detection timeout (5s)');
+          resolve(null);
+        }
+      }, this.DETECTION_TIMEOUT);
+    });
   }
 }
