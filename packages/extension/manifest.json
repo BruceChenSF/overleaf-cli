@@ -6,11 +6,12 @@
   "permissions": ["cookies", "storage"],
   "host_permissions": [
     "https://*.overleaf.com/*",
+    "https://*.cn.overleaf.com/*",
     "ws://localhost:3456/*"
   ],
   "content_scripts": [
     {
-      "matches": ["https://*.overleaf.com/project/*"],
+      "matches": ["https://*.overleaf.com/project/*", "https://*.cn.overleaf.com/project/*"],
       "js": ["dist/content.js"],
       "run_at": "document_end"
     }

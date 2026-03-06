@@ -20,9 +20,12 @@ export function setupAPIInterceptor(config: InterceptorConfig): void {
   window.fetch = async function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
 
+    // Debug: Log ALL fetch requests to see what's happening
+    console.log('[Interceptor] Fetch called:', url.substring(0, 100));
+
     // Check if this is an Overleaf API request we care about
     if (shouldInterceptRequest(url)) {
-      console.log('[Interceptor] Intercepting request:', url);
+      console.log('[Interceptor] ✅ Intercepting request:', url);
 
       try {
         // Forward to mirror server
@@ -46,6 +49,8 @@ export function setupAPIInterceptor(config: InterceptorConfig): void {
         console.error('[Interceptor] Failed to forward to mirror server:', error);
         // Continue with original request even if forwarding fails
       }
+    } else {
+      console.log('[Interceptor] ❌ Not intercepting (does not match patterns)');
     }
 
     // Execute original fetch
