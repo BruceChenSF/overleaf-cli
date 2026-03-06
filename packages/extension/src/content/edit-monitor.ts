@@ -104,8 +104,8 @@ export class EditMonitor {
       this.editorView = editorView;
       console.log('[EditMonitor] ✅ EditorView detected successfully');
 
-      // TODO: 设置 transaction 监听器
-      // this.setupTransactionListener();
+      // 设置 transaction 监听器
+      this.setupTransactionListener();
 
       this.monitoring = true;
       console.log('[EditMonitor] Started monitoring');
@@ -184,5 +184,82 @@ export class EditMonitor {
         }
       }, this.DETECTION_TIMEOUT);
     });
+  }
+
+  /**
+   * 设置 transaction 监听器
+   *
+   * 注册 CodeMirror 6 的 StateField.updateListener 来监听编辑事务。
+   *
+   * @private
+   */
+  private setupTransactionListener(): void {
+    if (!this.editorView) {
+      console.error('[EditMonitor] Cannot setup listener: no EditorView');
+      return;
+    }
+
+    console.log('[EditMonitor] Setting up transaction listener...');
+
+    // TODO: 实现实际的监听器注册
+    // 这需要根据 CodeMirror 6 的实际 API 来实现
+    // 可能需要劫持 EditorState 或者使用插件系统
+
+    console.log('[EditMonitor] Transaction listener setup complete');
+  }
+
+  /**
+   * 处理编辑事务
+   *
+   * @param transaction - CodeMirror transaction 对象
+   * @private
+   */
+  private handleTransaction(transaction: Transaction): void {
+    try {
+      // 1. 过滤：跳过没有实际变更的 transaction
+      if (!transaction.docChanged) {
+        return;
+      }
+
+      console.log('[EditMonitor] Transaction detected, docChanged=true');
+
+      // 2. 提取变更
+      const changes = transaction.changes;
+      if (!changes) {
+        console.warn('[EditMonitor] No changes in transaction');
+        return;
+      }
+
+      // TODO: 转换为 ops
+      // const ops = this.convertChangesToOps(changes, transaction.startState);
+
+      // TODO: 发送编辑事件
+      // this.sendEditEvent(ops, this.getTransactionSource(transaction));
+
+    } catch (error) {
+      console.error('[EditMonitor] Error handling transaction:', error);
+    }
+  }
+
+  /**
+   * 判断 transaction 的来源（本地或远程）
+   *
+   * @param transaction - CodeMirror transaction 对象
+   * @returns 'local' | 'remote'
+   * @private
+   */
+  private getTransactionSource(transaction: Transaction): 'local' | 'remote' {
+    // 检查是否有用户交互事件
+    if (transaction.isUserEvent) {
+      const hasUserEvent = transaction.isUserEvent("input") ||
+                           transaction.isUserEvent("paste") ||
+                           transaction.isUserEvent("delete");
+      if (hasUserEvent) {
+        return 'local';
+      }
+    }
+
+    // 默认为远程
+    return 'remote';
   }
 }
