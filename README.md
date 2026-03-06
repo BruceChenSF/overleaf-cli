@@ -1,154 +1,98 @@
-# Overleaf CC
+# Overleaf Mirror
 
-Run Claude Code CLI in Overleaf with bidirectional file synchronization and dual terminal support.
+Bidirectional file synchronization between Overleaf and local file system for Claude Code.
 
-## Features
+## Overview
 
-- **🔄 Bidirectional Sync** - Seamless synchronization between Overleaf and local Claude Code environment
-- **🎯 Dual Terminal Modes** - Choose between local terminal or integrated in-page terminal
-- **⚡ Smart Sync Modes** - Auto-sync for trusted workflows or manual sync for controlled changes
-- **🔌 Native Integration** - Terminal sidebar integrates with Overleaf's UI
-- **🎨 Claude Icon** - Clean, recognizable interface using official Claude branding
+Overleaf Mirror intercepts API calls from the Overleaf web interface and maintains a local mirror of your project files. This allows Claude Code to access and modify your Overleaf projects with real-time synchronization.
 
 ## Architecture
 
-This project consists of two parts:
-
-1. **@overleaf-cc/bridge** - Local CLI tool that runs Claude Code and manages file sync
-2. **overleaf-cc-extension** - Chrome extension providing UI and terminal integration
-
-### System Overview
-
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      Overleaf 网页                           │
-│  ┌──────────────┐         ┌──────────────┐                 │
-│  │  Claude 按钮  │ ────▶  │  下拉菜单 UI  │                 │
-│  └──────────────┘         └──────────────┘                 │
-│         │                        │                          │
-│         ▼                        ▼                          │
-│  ┌──────────────┐         ┌──────────────┐                 │
-│  │ 侧边栏切换器  │         │ Content      │                 │
-│  │ + 终端按钮    │         │ Script       │                 │
-│  └──────────────┘         └──────────────┘                 │
-│         │                        │                          │
-│         ▼                 ┌──────┴──────┐                   │
-│  ┌──────────────┐         │             │                   │
-│  │ 终端侧边栏    │         │文件监听+同步 │                   │
-│  │ (xterm.js)   │         │  (DOM操作)   │                   │
-│  └──────────────┘         └──────────────┘                 │
-└─────────────────────────────────────────────────────────────┘
-                          │
-                    Chrome Extension API
-                          │
-┌─────────────────────────────────────────────────────────────┐
-│                   Bridge CLI (本地)                          │
-│  ┌──────────────┐         ┌──────────────┐                 │
-│  │文件监听      │         │Claude Code   │                 │
-│  │本地变化检测  │         │执行环境      │                 │
-│  └──────────────┘         └──────────────┘                 │
-└─────────────────────────────────────────────────────────────┘
+Overleaf Browser → Extension (API Interceptor)
+                           ↓
+                    WebSocket (ws://localhost:3456)
+                           ↓
+                  Local Mirror Server
+                           ↓
+                  File System (~/overleaf-mirror/)
+                           ↓
+                      Claude Code
 ```
 
 ## Quick Start
 
-### 1. Install the Bridge CLI
+### Installation
 
 ```bash
-npm install -g @overleaf-cc/bridge
+# Clone repository
+git clone https://github.com/yourusername/overleaf-cc.git
+cd overleaf-cc
+
+# Install dependencies
+pnpm install
+
+# Build all packages
+pnpm build
 ```
 
-### 2. Start the Bridge Server
+### Running the Mirror Server
 
 ```bash
-overleaf-cc-bridge
+cd packages/mirror-server
+npm start
 ```
 
-### 3. Install the Chrome Extension
+Server will start on port 3456.
 
-1. Build the extension: `npm run build`
-2. Open `chrome://extensions/`
-3. Enable "Developer mode"
-4. Click "Load unpacked"
-5. Select the `dist` directory
+### Loading the Browser Extension
 
-### 4. Use in Overleaf
+1. Build the extension:
+   ```bash
+   cd packages/extension
+   npm run build
+   ```
+
+2. Load in Chrome:
+   - Open `chrome://extensions/`
+   - Enable "Developer mode"
+   - Click "Load unpacked"
+   - Select `packages/extension/`
+
+### Using with Claude Code
 
 1. Open any Overleaf project
-2. Click the Claude icon in the toolbar
-3. Choose your terminal mode (local or in-page)
-4. Start using Claude Code!
+2. Extension will automatically connect to local server
+3. Files will be mirrored to `~/overleaf-mirror/<project-id>/`
+4. Point Claude Code to this directory
+5. Changes made by Claude Code will sync back to Overleaf
+
+## Documentation
+
+- [Design Document](docs/plans/2026-03-06-overleaf-mirror-design.md)
+- [Implementation Plan](docs/plans/2026-03-06-overleaf-mirror-implementation.md)
+- [API Reference](docs/overleaf-api-reference.md)
+- [Testing Guide](docs/testing-guide.md)
 
 ## Troubleshooting
 
-### File Sync Timeouts
+### Connection Issues
 
-If you see "Request timeout" errors during sync:
-- The extension automatically retries failed downloads up to 3 times
-- Check your internet connection
-- Try reloading the extension
-- See [Troubleshooting Guide](docs/troubleshooting.md) for details
-
-### Files Not Deleting
-
-If deleted files remain in local workspace:
+If the extension cannot connect to the server:
+- Ensure the mirror server is running on port 3456
 - Check browser console for error messages
-- Ensure Bridge is running and connected
-- Try manual sync: Click the extension icon → Sync Now
+- Verify WebSocket is not blocked by firewall/antivirus
 
-### Excessive Sync Triggers
+### File Sync Issues
 
-If sync triggers when expanding folders:
-- This is fixed in v1.2.0 - update the extension
-- The file tree watcher now distinguishes between folder expansion and file changes
-
-## Sync Modes
-
-### Auto Sync (Default)
-- Changes automatically sync between Overleaf and local environment
-- Immediate sync when Claude Code completes a task
-- Perfect for users who trust Claude's suggestions
-
-### Manual Sync
-- Review changes before syncing
-- Click "Sync to Overleaf" button when ready
-- Ideal for collaborative projects requiring review
-
-## How It Works
-
-### Bidirectional Synchronization
-
-**Overleaf → Local:**
-- Event listeners detect edits in Overleaf editor
-- Changes immediately sync to local environment
-
-**Local → Overleaf:**
-- Polling every 3-5 seconds detects local changes
-- Immediate sync when Claude Code completes tasks
-- Manual sync button available in manual mode
-
-### Conflict Detection
-
-- Detects when both Overleaf and local files are modified
-- Shows warning in dropdown menu
-- Respects collaborators' changes
-- Future: Full conflict resolution via Claude Code skill
+If files are not syncing:
+- Check server logs for incoming requests
+- Verify file permissions in `~/overleaf-mirror/` directory
+- Try reloading the extension and reconnecting
 
 ## Development
 
-See [docs/plans/2026-03-03-overleaf-cc-design.md](docs/plans/2026-03-03-overleaf-cc-design.md) for detailed design documentation.
-
-See [docs/INSTALLATION.md](docs/INSTALLATION.md) for detailed setup instructions.
-
-## Roadmap
-
-- [x] Basic file reading from Overleaf DOM
-- [x] Claude icon button
-- [ ] Bidirectional file synchronization
-- [ ] Dropdown menu with sync controls
-- [ ] In-page terminal sidebar
-- [ ] Conflict detection UI
-- [ ] Claude Code skill integration (future)
+See [Testing Guide](docs/testing-guide.md) for manual testing instructions.
 
 ## License
 
