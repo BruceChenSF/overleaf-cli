@@ -1,6 +1,6 @@
 /**
  * API interceptor for Overleaf requests
- * Intercepts both fetch and XMLHttpRequest
+ * Intercepts both fetch and XMLHttpRequest using Proxy (stealthy approach)
  */
 
 import type { MirrorClient } from '../client';
@@ -32,54 +32,68 @@ export function setupAPIInterceptor(config: InterceptorConfig): void {
 
   console.log('[Interceptor] Setting up interceptors for project:', projectId);
 
-  // 1. Intercept fetch API using Object.defineProperty (prevents being overwritten)
-  const originalFetch = window.fetch.bind(window);
+  // 1. Intercept fetch API using Proxy (stealthy, hard to detect)
+  const originalFetch = window.fetch;
 
-  const interceptedFetch = async function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+  const fetchProxy = new Proxy(originalFetch, {
+    apply(target, thisArg, args) {
+      const input = args[0];
+      const init = args[1];
 
-    console.log('[Interceptor] ⚡ Fetch called:', url.substring(0, 100));
-
-    if (shouldInterceptRequest(url)) {
-      console.log('[Interceptor] ✅ Intercepting fetch request:', url);
-
-      // Only forward if we have a client connection
-      if (globalClient) {
-        try {
-          const request: APIRequest = {
-            url: typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
-            method: init?.method || 'GET',
-            body: init?.body ? JSON.parse(init.body as string) : undefined,
-            headers: init?.headers ? JSON.parse(JSON.stringify(init.headers)) : undefined,
-          };
-
-          globalClient.sendRequest({
-            type: 'mirror',
-            project_id: projectId,
-            api_endpoint: extractApiEndpoint(request.url),
-            method: request.method,
-            data: request.body,
-          });
-
-          console.log('[Interceptor] Successfully forwarded to mirror server');
-        } catch (error) {
-          console.error('[Interceptor] Failed to forward to mirror server:', error);
-        }
+      // Extract URL from various input formats
+      let url: string;
+      if (typeof input === 'string') {
+        url = input;
+      } else if (input instanceof URL) {
+        url = input.href;
+      } else if (input instanceof Request) {
+        url = input.url;
       } else {
-        console.log('[Interceptor] No client connection yet, skipping forward');
+        url = String(input);
       }
+
+      console.log('[Interceptor] ⚡ Fetch called:', url.substring(0, 100));
+
+      // Check if we should intercept this request
+      if (shouldInterceptRequest(url)) {
+        console.log('[Interceptor] ✅ Intercepting fetch request:', url);
+
+        // Forward to mirror server if we have a connection
+        if (globalClient) {
+          try {
+            const request: APIRequest = {
+              url: url,
+              method: init?.method || 'GET',
+              body: init?.body ? JSON.parse(init.body as string) : undefined,
+              headers: init?.headers ? JSON.parse(JSON.stringify(init.headers)) : undefined,
+            };
+
+            globalClient.sendRequest({
+              type: 'mirror',
+              project_id: projectId,
+              api_endpoint: extractApiEndpoint(request.url),
+              method: request.method,
+              data: request.body,
+            });
+
+            console.log('[Interceptor] Successfully forwarded to mirror server');
+          } catch (error) {
+            console.error('[Interceptor] Failed to forward to mirror server:', error);
+          }
+        } else {
+          console.log('[Interceptor] No client connection yet, skipping forward');
+        }
+      }
+
+      // Call the original fetch with all arguments
+      return Reflect.apply(target, thisArg, args);
     }
-
-    return originalFetch(input, init);
-  };
-
-  Object.defineProperty(window, 'fetch', {
-    value: interceptedFetch,
-    writable: false,  // Prevent Overleaf from overwriting our interceptor
-    configurable: false
   });
 
-  console.log('[Interceptor] Fetch API interception setup (locked)');
+  // Replace fetch with our proxy
+  window.fetch = fetchProxy as any;
+
+  console.log('[Interceptor] Fetch API interception setup (Proxy)');
 
   // 2. Intercept XMLHttpRequest
   const originalOpen = XMLHttpRequest.prototype.open;
@@ -132,7 +146,7 @@ export function setupAPIInterceptor(config: InterceptorConfig): void {
   };
 
   interceptorSetup = true;
-  console.log('[Interceptor] All interceptors setup complete (locked)');
+  console.log('[Interceptor] All interceptors setup complete (Proxy mode)');
 }
 
 function shouldInterceptRequest(url: string): boolean {
