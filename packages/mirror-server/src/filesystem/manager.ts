@@ -28,6 +28,12 @@ export class FileSystemManager {
 
   async readFile(path: string): Promise<string> {
     const fullPath = join(this.projectDir, path);
+    const exists = await fs.pathExists(fullPath);
+
+    if (!exists) {
+      throw new Error(`File does not exist: ${path}`);
+    }
+
     return await fs.readFile(fullPath, 'utf-8');
   }
 
@@ -37,8 +43,18 @@ export class FileSystemManager {
   }
 
   async renameFile(oldPath: string, newPath: string): Promise<void> {
+    if (!shouldSyncFile(newPath)) {
+      throw new Error(`File type not supported for sync: ${newPath}`);
+    }
+
     const oldFullPath = join(this.projectDir, oldPath);
     const newFullPath = join(this.projectDir, newPath);
+
+    const exists = await fs.pathExists(oldFullPath);
+    if (!exists) {
+      throw new Error(`Source file does not exist: ${oldPath}`);
+    }
+
     await fs.move(oldFullPath, newFullPath);
   }
 
