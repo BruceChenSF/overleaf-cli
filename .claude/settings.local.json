@@ -32,7 +32,8 @@
       "Skill(superpowers:subagent-driven-development)",
       "Bash(npm test:*)",
       "Bash(git show:*)",
-      "Bash(if not exist \"C:\\\\Home\\\\CodeProjects\\\\overleaf-cc\\\\docs\" mkdir \"C:\\\\Home\\\\CodeProjects\\\\overleaf-cc\\\\docs\")"
+      "Bash(if not exist \"C:\\\\Home\\\\CodeProjects\\\\overleaf-cc\\\\docs\" mkdir \"C:\\\\Home\\\\CodeProjects\\\\overleaf-cc\\\\docs\")",
+      "Bash(git tag:*)"
     ]
   },
   "enabledPlugins": {
