@@ -3,6 +3,18 @@ import { MirrorClient } from '../client';
 
 // CodeMirror 6 type aliases (using any per project pattern)
 type Transaction = any;
+type ChangeSet = any;
+type EditorState = any;
+type Text = any;
+
+/**
+ * ShareJS 操作类型
+ */
+interface AnyOperation {
+  p: number;  // position
+  i?: string; // insert
+  d?: string; // delete
+}
 
 /**
  * EditMonitor - Overleaf CodeMirror 6 编辑监听器
@@ -233,11 +245,20 @@ export class EditMonitor {
         return;
       }
 
-      // TODO: 转换为 ops
-      // const ops = this.convertChangesToOps(changes, transaction.startState);
+      // 3. 转换为 ops
+      const ops = this.convertChangesToOps(changes, transaction.startState);
 
-      // TODO: 发送编辑事件
-      // this.sendEditEvent(ops, this.getTransactionSource(transaction));
+      // 4. 过滤空操作
+      if (ops.length === 0) {
+        console.log('[EditMonitor] No ops extracted (possibly cursor-only movement)');
+        return;
+      }
+
+      console.log(`[EditMonitor] Extracted ${ops.length} ops`);
+
+      // 5. 发送编辑事件
+      const source = this.getTransactionSource(transaction);
+      this.sendEditEvent(ops, source);
 
     } catch (error) {
       console.error('[EditMonitor] Error handling transaction:', error);
@@ -264,5 +285,168 @@ export class EditMonitor {
 
     // 默认为远程
     return 'remote';
+  }
+
+  /**
+   * 将 CodeMirror changes 转换为 ShareJS ops 格式
+   *
+   * @param changes - CodeMirror ChangeSet 对象
+   * @param startState - Transaction 开始时的 EditorState
+   * @returns ShareJS ops 数组
+   * @private
+   */
+  private convertChangesToOps(
+    changes: ChangeSet,
+    startState: EditorState
+  ): AnyOperation[] {
+    const ops: AnyOperation[] = [];
+    let positionOffset = 0;
+
+    // 遍历所有变更
+    if (changes.iterChanges) {
+      changes.iterChanges((
+        fromA: number,
+        toA: number,
+        fromB: number,
+        toB: number,
+        inserted: Text
+      ) => {
+        // 处理删除
+        if (fromA < toA) {
+          const deletedText = startState.sliceDoc(fromA, toA);
+          ops.push({
+            p: fromA + positionOffset,
+            d: deletedText
+          });
+          positionOffset -= (toA - fromA);
+          console.log(`[EditMonitor] Delete at ${fromA + positionOffset}: "${deletedText}"`);
+        }
+
+        // 处理插入
+        if (fromB < toB) {
+          const insertedText = inserted.toString();
+          ops.push({
+            p: fromB + positionOffset,
+            i: insertedText
+          });
+          positionOffset += (toB - fromB);
+          console.log(`[EditMonitor] Insert at ${fromB + positionOffset}: "${insertedText}"`);
+        }
+      });
+    }
+
+    return ops;
+  }
+
+  /**
+   * 发送编辑事件到 Mirror Server
+   *
+   * @param ops - ShareJS ops 数组
+   * @param source - 操作来源（'local' | 'remote'）
+   * @private
+   */
+  private sendEditEvent(ops: AnyOperation[], source: string): void {
+    // 获取文档信息
+    const docId = this.getDocId();
+    const docName = this.getDocName();
+    const version = this.getVersion();
+
+    // 构造编辑事件数据
+    const editData: EditEventData = {
+      doc_id: docId,
+      doc_name: docName,
+      version: version,
+      ops: ops,
+      meta: {
+        user_id: this.getCurrentUserId(),
+        source: source,
+        timestamp: Date.now()
+      }
+    };
+
+    // 构造消息
+    const message = {
+      type: 'edit_event' as const,
+      project_id: this.projectId,
+      data: editData
+    };
+
+    console.log('[EditMonitor] Sending edit event:', JSON.stringify(message, null, 2));
+
+    // 通过 WebSocket 发送
+    try {
+      this.mirrorClient.send(message);
+      console.log('[EditMonitor] ✅ Edit event sent successfully');
+    } catch (error) {
+      console.error('[EditMonitor] ❌ Failed to send edit event:', error);
+    }
+  }
+
+  /**
+   * 获取当前文档 ID
+   *
+   * @returns string
+   * @private
+   */
+  private getDocId(): string {
+    // 从 URL 或 localStorage 获取
+    // 简化版：使用时间戳作为 doc_id
+    return `doc-${Date.now()}`;
+  }
+
+  /**
+   * 获取当前文档名称
+   *
+   * @returns string
+   * @private
+   */
+  private getDocName(): string {
+    // 从 URL 路径提取文件名
+    const urlPath = window.location.pathname;
+    const match = urlPath.match(/\/project\/[^/]+\/(.+)$/);
+    if (match && match[1]) {
+      return match[1];
+    }
+    return 'document.tex';
+  }
+
+  /**
+   * 获取文档版本号
+   *
+   * @returns number
+   * @private
+   */
+  private getVersion(): number {
+    // 使用时间戳作为版本号
+    return Date.now();
+  }
+
+  /**
+   * 获取当前用户 ID
+   *
+   * @returns string
+   * @private
+   */
+  private getCurrentUserId(): string {
+    // 尝试从 localStorage 获取
+    try {
+      const userInfo = localStorage.getItem('user');
+      if (userInfo) {
+        const user = JSON.parse(userInfo);
+        if (user.id) return user.id;
+        if (user._id) return user._id;
+      }
+    } catch (e) {
+      // 忽略
+    }
+
+    // 从 URL 路径获取
+    const urlPath = window.location.pathname;
+    const userMatch = urlPath.match(/\/user\/([^\/]+)/);
+    if (userMatch && userMatch[1]) {
+      return userMatch[1];
+    }
+
+    return 'unknown';
   }
 }
