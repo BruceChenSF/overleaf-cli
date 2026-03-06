@@ -1,4 +1,4 @@
-import { EditEventData, AnyOperation } from '@overleaf-cc/shared';
+import { EditEventData, TEXT_FILE_EXTENSIONS, AnyOperation } from '@overleaf-cc/shared';
 import { MirrorClient } from '../client';
 
 // CodeMirror 6 type aliases (using any per project pattern)
@@ -491,9 +491,18 @@ export class EditMonitor {
    * @private
    */
   private sendEditEvent(ops: AnyOperation[], source: string): void {
+    // 获取文档名称
+    const docName = this.getDocName();
+
+    // 检查文件扩展名
+    const extension = this.getExtension(docName);
+    if (!TEXT_FILE_EXTENSIONS.has(extension)) {
+      console.log(`[EditMonitor] Skipped (extension not in whitelist): ${extension}`);
+      return;
+    }
+
     // 获取文档信息
     const docId = this.getDocId();
-    const docName = this.getDocName();
     const version = this.getVersion();
 
     // 构造编辑事件数据
@@ -593,5 +602,17 @@ export class EditMonitor {
     }
 
     return 'unknown';
+  }
+
+  /**
+   * 获取文件扩展名
+   *
+   * @param filename - 文件名
+   * @returns 扩展名（包含点号，如 '.tex'）
+   * @private
+   */
+  private getExtension(filename: string): string {
+    const lastDot = filename.lastIndexOf('.');
+    return lastDot !== -1 ? filename.substring(lastDot) : '';
   }
 }
