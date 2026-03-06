@@ -11,7 +11,9 @@ export default defineConfig({
       },
       output: {
         entryFileNames: '[name].js',
-        format: 'iife',
+        chunkFileNames: '[name].js',
+        assetFileNames: '[name].[ext]',
+        format: 'es',
       },
     },
   },
