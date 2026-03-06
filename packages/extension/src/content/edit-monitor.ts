@@ -30,6 +30,7 @@ export class EditMonitor {
   private mutationObserver: MutationObserver | null = null;
   private readonly DETECTION_TIMEOUT = 5000; // 5秒超时
   private fallbackInterval: number | null = null;
+  private originalDispatch: any = null;
 
   constructor(projectId: string, mirrorClient: MirrorClient) {
     this.projectId = projectId;
@@ -142,6 +143,12 @@ export class EditMonitor {
       this.fallbackInterval = null;
     }
 
+    // 恢复原始 dispatch 方法
+    if (this.originalDispatch && this.editorView) {
+      this.editorView.dispatch = this.originalDispatch;
+      this.originalDispatch = null;
+    }
+
     // 清理 EditorView 引用
     this.editorView = null;
 
@@ -215,27 +222,44 @@ export class EditMonitor {
     console.log('[EditMonitor] Setting up transaction listener...');
 
     try {
-      // 方式 1: 劫持 view.dispatch 方法
-      const originalDispatch = this.editorView.dispatch.bind(this.editorView);
-      const self = this; // 保存 this 引用
+      // Store original dispatch
+      this.originalDispatch = this.editorView.dispatch.bind(this.editorView);
 
-      this.editorView.dispatch = function(...args) {
-        // 调用原始方法
-        const result = originalDispatch(...args);
+      // Hook dispatch method
+      this.editorView.dispatch = (...args: any[]) => {
+        // Call original first
+        const result = this.originalDispatch(...args);
 
-        // 处理 transaction
-        if (args[0] && args[0].transactions) {
-          args[0].transactions.forEach((tr: Transaction) => {
-            // 使用箭头函数保持 'this' 绑定
-            if (tr.docChanged) {
-              try {
-                self.handleTransaction(tr);
-              } catch (error) {
-                console.error('[EditMonitor] Error in transaction handler:', error);
-              }
+        // Process transactions based on dispatch signature
+        let transactions: Transaction[] = [];
+
+        if (args.length === 0) {
+          // No transactions
+          return result;
+        } else if (args.length === 1) {
+          const first = args[0];
+          if (Array.isArray(first)) {
+            // dispatch([tr1, tr2, ...])
+            transactions = first;
+          } else if (first && typeof first === 'object') {
+            // Could be Transaction or TransactionSpec
+            // Check if it looks like a transaction
+            if (first.docChanged !== undefined || first.changes !== undefined) {
+              transactions = [first];
             }
-          });
+          }
         }
+
+        // Process each transaction
+        transactions.forEach((tr: Transaction) => {
+          if (tr && tr.docChanged) {
+            try {
+              this.handleTransaction(tr);
+            } catch (error) {
+              console.error('[EditMonitor] Error in transaction handler:', error);
+            }
+          }
+        });
 
         return result;
       };
