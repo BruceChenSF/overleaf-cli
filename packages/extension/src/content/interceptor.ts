@@ -1,5 +1,6 @@
 /**
- * Fetch API interceptor for Overleaf requests
+ * API interceptor for Overleaf requests
+ * Intercepts both fetch and XMLHttpRequest
  */
 
 import type { MirrorClient } from '../client';
@@ -13,22 +14,17 @@ interface InterceptorConfig {
 export function setupAPIInterceptor(config: InterceptorConfig): void {
   const { client, projectId } = config;
 
-  // Store original fetch
+  // 1. Intercept fetch API
   const originalFetch = window.fetch;
-
-  // Override fetch
   window.fetch = async function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
 
-    // Debug: Log ALL fetch requests to see what's happening
     console.log('[Interceptor] Fetch called:', url.substring(0, 100));
 
-    // Check if this is an Overleaf API request we care about
     if (shouldInterceptRequest(url)) {
-      console.log('[Interceptor] ✅ Intercepting request:', url);
+      console.log('[Interceptor] ✅ Intercepting fetch request:', url);
 
       try {
-        // Forward to mirror server
         const request: APIRequest = {
           url: typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
           method: init?.method || 'GET',
@@ -39,7 +35,7 @@ export function setupAPIInterceptor(config: InterceptorConfig): void {
         await client.sendRequest({
           type: 'mirror',
           project_id: projectId,
-          api_endpoint: request.url,
+          api_endpoint: extractApiEndpoint(request.url),
           method: request.method,
           data: request.body,
         });
@@ -47,21 +43,64 @@ export function setupAPIInterceptor(config: InterceptorConfig): void {
         console.log('[Interceptor] Successfully forwarded to mirror server');
       } catch (error) {
         console.error('[Interceptor] Failed to forward to mirror server:', error);
-        // Continue with original request even if forwarding fails
       }
-    } else {
-      console.log('[Interceptor] ❌ Not intercepting (does not match patterns)');
     }
 
-    // Execute original fetch
     return originalFetch(input, init);
   };
 
-  console.log('[Interceptor] Fetch API interception setup complete');
+  console.log('[Interceptor] Fetch API interception setup');
+
+  // 2. Intercept XMLHttpRequest
+  const originalOpen = XMLHttpRequest.prototype.open;
+  const originalSend = XMLHttpRequest.prototype.send;
+
+  XMLHttpRequest.prototype.open = function (
+    method: string,
+    url: string | URL,
+    ...rest: any[]
+  ) {
+    this._method = method;
+    this._url = typeof url === 'string' ? url : url.href;
+    return originalOpen.apply(this, [method, url, ...rest] as any);
+  };
+
+  XMLHttpRequest.prototype.send = function (body?: any) {
+    const url = this._url as string;
+
+    console.log('[Interceptor] XHR called:', this._method, url.substring(0, 100));
+
+    if (shouldInterceptRequest(url)) {
+      console.log('[Interceptor] ✅ Intercepting XHR request:', url);
+
+      try {
+        const request: APIRequest = {
+          url: url,
+          method: this._method || 'GET',
+          body: body ? JSON.parse(body) : undefined,
+        };
+
+        client.sendRequest({
+          type: 'mirror',
+          project_id: projectId,
+          api_endpoint: extractApiEndpoint(request.url),
+          method: request.method,
+          data: request.body,
+        });
+
+        console.log('[Interceptor] Successfully forwarded XHR to mirror server');
+      } catch (error) {
+        console.error('[Interceptor] Failed to forward XHR to mirror server:', error);
+      }
+    }
+
+    return originalSend.apply(this, [body] as any);
+  };
+
+  console.log('[Interceptor] XMLHttpRequest interception setup complete');
 }
 
 function shouldInterceptRequest(url: string): boolean {
-  // Intercept file-related API calls
   const fileApiPatterns = [
     '/api/project/',
     '/api/file/',
@@ -70,6 +109,15 @@ function shouldInterceptRequest(url: string): boolean {
     '/api/downloads/',
   ];
 
-  // Only intercept if URL matches our patterns
   return fileApiPatterns.some(pattern => url.includes(pattern));
+}
+
+function extractApiEndpoint(fullUrl: string): string {
+  try {
+    const urlObj = new URL(fullUrl);
+    return urlObj.pathname + urlObj.search;
+  } catch {
+    // If URL parsing fails, return the full URL
+    return fullUrl;
+  }
 }
