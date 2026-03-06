@@ -1,6 +1,8 @@
 import { MirrorClient } from '../client';
+import { EditMonitor } from './edit-monitor';
 
 let mirrorClient: MirrorClient | null = null;
+let editMonitor: EditMonitor | null = null;
 
 // Extract project ID immediately (available at document_start)
 function extractProjectId(): string | null {
@@ -46,6 +48,12 @@ async function initializeMirror(): Promise<void> {
     mirrorClient = new MirrorClient();
     await mirrorClient.connect();
 
+    // 新增：启动编辑监测
+    if (projectId) {
+      editMonitor = new EditMonitor(projectId, mirrorClient);
+      editMonitor.start();
+    }
+
     console.log('[Mirror] Initialization complete');
   } catch (error) {
     console.error('[Mirror] Initialization failed:', error);
@@ -53,6 +61,9 @@ async function initializeMirror(): Promise<void> {
 }
 
 window.addEventListener('beforeunload', () => {
+  if (editMonitor) {
+    editMonitor.stop();
+  }
   if (mirrorClient) {
     mirrorClient.disconnect();
   }

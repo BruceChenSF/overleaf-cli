@@ -2,6 +2,11 @@ import { defineConfig } from 'vite';
 import { resolve } from 'path';
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      '@overleaf-cc/shared': resolve(__dirname, '../shared/src/types.ts'),
+    },
+  },
   build: {
     outDir: 'dist',
     rollupOptions: {
