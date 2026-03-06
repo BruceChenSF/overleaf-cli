@@ -1,4 +1,4 @@
-import { EditEventData, AnyOperation, TEXT_FILE_EXTENSIONS } from '@overleaf-cc/shared';
+import { EditEventData } from '@overleaf-cc/shared';
 import { MirrorClient } from '../client';
 
 /**
@@ -24,13 +24,6 @@ export class EditMonitor {
   private mutationObserver: MutationObserver | null = null;
   private readonly DETECTION_TIMEOUT = 5000; // 5秒超时
 
-  // CodeMirror 6 类型别名（简化版，避免依赖）
-  // type EditorView = any;
-  // type EditorState = any;
-  // type Transaction = any;
-  // type ChangeSet = any;
-  // type Text = any;
-
   constructor(projectId: string, mirrorClient: MirrorClient) {
     this.projectId = projectId;
     this.mirrorClient = mirrorClient;
@@ -47,7 +40,7 @@ export class EditMonitor {
   async start(): Promise<void> {
     if (this.monitoring) {
       console.warn('[EditMonitor] Already monitoring');
-      return;
+      throw new Error('[EditMonitor] Already monitoring');
     }
 
     console.log('[EditMonitor] Starting CodeMirror 6 detection...');
@@ -72,6 +65,7 @@ export class EditMonitor {
 
     } catch (error) {
       console.error('[EditMonitor] Failed to start:', error);
+      throw error;
     }
   }
 
