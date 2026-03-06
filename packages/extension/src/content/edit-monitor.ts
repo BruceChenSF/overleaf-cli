@@ -1,6 +1,9 @@
 import { EditEventData } from '@overleaf-cc/shared';
 import { MirrorClient } from '../client';
 
+// CodeMirror 6 type aliases (using any per project pattern)
+type Transaction = any;
+
 /**
  * EditMonitor - Overleaf CodeMirror 6 编辑监听器
  *
