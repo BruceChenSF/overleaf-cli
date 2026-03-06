@@ -118,6 +118,16 @@ export class MirrorClient {
     });
   }
 
+
+  send(message: any): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      console.warn('[MirrorClient] Cannot send message: WebSocket not connected');
+      return;
+    }
+
+    this.ws.send(JSON.stringify(message));
+  }
+
   private handleAck(message: AckMessage & { request_id: string }): void {
     const { request_id } = message;
     const pending = this.pendingRequests.get(request_id);
