@@ -1,5 +1,4 @@
 import { MirrorClient } from '../client';
-import { setupAPIInterceptor } from './interceptor';
 
 let mirrorClient: MirrorClient | null = null;
 
@@ -15,19 +14,23 @@ if (!projectId) {
 } else {
   console.log('[Mirror] Project ID:', projectId);
 
-  // CRITICAL: Setup interceptor IMMEDIATELY before any other code runs
-  // We pass a placeholder client initially, will be replaced after connection
-  console.log('[Mirror] Setting up API interceptor immediately...');
+  // Send project ID to background script (for webRequest interceptor)
+  try {
+    chrome.runtime.sendMessage({
+      type: 'SET_PROJECT_ID',
+      projectId: projectId
+    }, (response) => {
+      if (chrome.runtime.lastError) {
+        console.error('[Mirror] Failed to send project ID to background:', chrome.runtime.lastError.message);
+      } else {
+        console.log('[Mirror] Project ID sent to background script');
+      }
+    });
+  } catch (error) {
+    console.error('[Mirror] Error sending message to background:', error);
+  }
 
-  // Create a temporary interceptor that will queue requests
-  setupAPIInterceptor({
-    client: null as any, // Will be replaced after connection
-    projectId,
-  });
-
-  console.log('[Mirror] API interceptor setup complete, waiting for DOM to connect WebSocket');
-
-  // Now wait for DOM to load before connecting WebSocket
+  // Wait for DOM to load before connecting WebSocket
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', initializeMirror);
   } else {
@@ -42,12 +45,6 @@ async function initializeMirror(): Promise<void> {
 
     mirrorClient = new MirrorClient();
     await mirrorClient.connect();
-
-    // Update interceptor with the real client
-    setupAPIInterceptor({
-      client: mirrorClient,
-      projectId: extractProjectId()!,
-    });
 
     console.log('[Mirror] Initialization complete');
   } catch (error) {

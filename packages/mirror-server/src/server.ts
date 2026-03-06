@@ -1,5 +1,6 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { Server as HttpServer } from 'http';
+import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { ClientConnection } from './client-connection';
 import { FileWatcher } from './filesystem/watcher';
 import type { WSMessage, SyncCommandMessage } from './types';
@@ -8,22 +9,83 @@ const PORT = 3456;
 
 export class MirrorServer {
   private wss: WebSocketServer;
+  private httpServer: HttpServer;
   private connections: Map<WebSocket, ClientConnection> = new Map();
   private fileWatchers: Map<string, FileWatcher> = new Map();
 
   constructor(httpServer?: HttpServer) {
+    // Create HTTP server for API endpoints
+    this.httpServer = httpServer || createServer();
+
+    // Setup HTTP routes
+    this.setupHTTPServer();
+
+    // Setup WebSocket server
     this.wss = new WebSocketServer({
-      port: httpServer ? undefined : PORT,
-      server: httpServer,
+      server: this.httpServer,
     });
 
-    this.setupServer();
+    this.setupWebSocketServer();
+
+    // Start listening
+    if (!httpServer) {
+      this.httpServer.listen(PORT, () => {
+        console.log(`Mirror server listening on port ${PORT}`);
+      });
+    }
   }
 
-  private setupServer(): void {
-    this.wss.on('connection', (ws: WebSocket) => {
-      console.log('New client connected');
+  private setupHTTPServer(): void {
+    this.httpServer.on('request', async (req: IncomingMessage, res: ServerResponse) => {
+      // Enable CORS
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
+      if (req.method === 'OPTIONS') {
+        res.writeHead(200);
+        res.end();
+        return;
+      }
+
+      // Handle /api/mirror endpoint
+      if (req.url === '/api/mirror' && req.method === 'POST') {
+        let body = '';
+
+        req.on('data', (chunk) => {
+          body += chunk.toString();
+        });
+
+        req.on('end', () => {
+          try {
+            const data = JSON.parse(body);
+
+            // Handle the mirror request
+            this.handleMirrorRequest(data);
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true }));
+          } catch (error) {
+            console.error('[HTTP] Failed to parse request:', error);
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid JSON' }));
+          }
+        });
+      } else {
+        res.writeHead(404);
+        res.end('Not found');
+      }
+    });
+  }
+
+  private handleMirrorRequest(data: any): void {
+    // For now, just log the request
+    // Later we'll implement actual Overleaf API handling
+    console.log('[HTTP] Received:', data.method, data.api_endpoint);
+  }
+
+  private setupWebSocketServer(): void {
+    this.wss.on('connection', (ws: WebSocket) => {
       const connection = new ClientConnection(ws, '');
 
       this.connections.set(ws, connection);
@@ -33,7 +95,6 @@ export class MirrorServer {
       });
 
       ws.on('close', () => {
-        console.log('Client disconnected');
         this.connections.delete(ws);
       });
 
@@ -41,8 +102,6 @@ export class MirrorServer {
         this.handleMessage(connection, message);
       });
     });
-
-    console.log(`Mirror server listening on port ${PORT}`);
   }
 
   private handleMessage(connection: ClientConnection, message: WSMessage): void {

@@ -3,11 +3,16 @@
   "name": "Overleaf Mirror",
   "version": "2.0.0",
   "description": "Bidirectional file sync for Claude Code",
-  "permissions": ["cookies", "storage"],
+  "permissions": [
+    "cookies",
+    "storage",
+    "webRequest"
+  ],
   "host_permissions": [
     "https://*.overleaf.com/*",
     "https://*.cn.overleaf.com/*",
-    "ws://localhost:3456/*"
+    "ws://localhost:3456/*",
+    "http://localhost:3456/*"
   ],
   "content_scripts": [
     {
