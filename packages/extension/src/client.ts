@@ -92,19 +92,6 @@ export class MirrorClient {
     return `${Date.now()}-${Math.random().toString(36).substring(7)}`;
   }
 
-  send(message: WSMessage): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      throw new Error('WebSocket is not connected');
-    }
-
-    try {
-      this.ws.send(JSON.stringify(message));
-    } catch (error) {
-      console.error('[MirrorClient] Failed to send message:', error);
-      throw error;
-    }
-  }
-
   async sendRequest(request: WSMessage & { type: 'mirror' }): Promise<AckMessage> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error('WebSocket is not connected');

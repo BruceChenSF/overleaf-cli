@@ -140,7 +140,26 @@ export class EditMonitor {
 
     console.log('[EditMonitor] Sending edit event:', message);
 
-    // 通过 WebSocket 发送到 mirror server
-    this.mirrorClient.send(message);
+    // TODO: Temporary workaround - MirrorClient.send() will be added in Task 6
+    // Directly access the WebSocket for now
+    this.sendMessageDirectly(message);
+  }
+
+  private sendMessageDirectly(message: any): void {
+    // Access the private WebSocket directly via type assertion
+    // This is a temporary workaround pending Task 6 implementation
+    const client = this.mirrorClient as any;
+    const ws = client.ws as WebSocket | null;
+
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      console.error('[EditMonitor] WebSocket is not connected');
+      return;
+    }
+
+    try {
+      ws.send(JSON.stringify(message));
+    } catch (error) {
+      console.error('[EditMonitor] Failed to send message:', error);
+    }
   }
 }

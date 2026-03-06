@@ -28,7 +28,7 @@ export interface EditEventMessage {
 
 export interface EditEventData {
   doc_id: string;
-  doc_name: string;
+  doc_name?: string;
   version: number;
   ops: AnyOperation[];
   meta?: {
