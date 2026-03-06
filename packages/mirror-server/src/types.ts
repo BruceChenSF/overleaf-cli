@@ -2,11 +2,14 @@
  * Shared types for Overleaf Mirror system
  */
 
+import { EditEventMessage } from '@overleaf-cc/shared';
+
 // WebSocket message types
 export type WSMessage =
   | MirrorRequestMessage
   | SyncCommandMessage
-  | AckMessage;
+  | AckMessage
+  | EditEventMessage;
 
 export interface MirrorRequestMessage {
   type: 'mirror';

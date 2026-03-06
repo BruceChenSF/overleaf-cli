@@ -3,7 +3,9 @@ import { Server as HttpServer } from 'http';
 import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { ClientConnection } from './client-connection';
 import { FileWatcher } from './filesystem/watcher';
+import { handleEditMonitor } from './handlers/edit-monitor';
 import type { WSMessage, SyncCommandMessage } from './types';
+import type { EditEventMessage } from '@overleaf-cc/shared';
 
 const PORT = 3456;
 
@@ -109,6 +111,9 @@ export class MirrorServer {
       case 'mirror':
         console.log('Received mirror request:', message.api_endpoint);
         // Will be implemented in later tasks
+        break;
+      case 'edit_event':
+        handleEditMonitor(message as EditEventMessage);
         break;
       case 'sync':
         const syncMessage = message as SyncCommandMessage;
