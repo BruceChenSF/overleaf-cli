@@ -32,12 +32,13 @@ export function setupAPIInterceptor(config: InterceptorConfig): void {
 
   console.log('[Interceptor] Setting up interceptors for project:', projectId);
 
-  // 1. Intercept fetch API
-  const originalFetch = window.fetch;
-  window.fetch = async function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  // 1. Intercept fetch API using Object.defineProperty (prevents being overwritten)
+  const originalFetch = window.fetch.bind(window);
+
+  const interceptedFetch = async function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
 
-    console.log('[Interceptor] Fetch called:', url.substring(0, 100));
+    console.log('[Interceptor] ⚡ Fetch called:', url.substring(0, 100));
 
     if (shouldInterceptRequest(url)) {
       console.log('[Interceptor] ✅ Intercepting fetch request:', url);
@@ -72,7 +73,13 @@ export function setupAPIInterceptor(config: InterceptorConfig): void {
     return originalFetch(input, init);
   };
 
-  console.log('[Interceptor] Fetch API interception setup');
+  Object.defineProperty(window, 'fetch', {
+    value: interceptedFetch,
+    writable: false,  // Prevent Overleaf from overwriting our interceptor
+    configurable: false
+  });
+
+  console.log('[Interceptor] Fetch API interception setup (locked)');
 
   // 2. Intercept XMLHttpRequest
   const originalOpen = XMLHttpRequest.prototype.open;
@@ -125,7 +132,7 @@ export function setupAPIInterceptor(config: InterceptorConfig): void {
   };
 
   interceptorSetup = true;
-  console.log('[Interceptor] All interceptors setup complete');
+  console.log('[Interceptor] All interceptors setup complete (locked)');
 }
 
 function shouldInterceptRequest(url: string): boolean {
