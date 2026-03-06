@@ -1,4 +1,4 @@
-import { EditEventData } from '@overleaf-cc/shared';
+import { EditEventData, AnyOperation } from '@overleaf-cc/shared';
 import { MirrorClient } from '../client';
 
 // CodeMirror 6 type aliases (using any per project pattern)
@@ -6,15 +6,6 @@ type Transaction = any;
 type ChangeSet = any;
 type EditorState = any;
 type Text = any;
-
-/**
- * ShareJS 操作类型
- */
-interface AnyOperation {
-  p: number;  // position
-  i?: string; // insert
-  d?: string; // delete
-}
 
 /**
  * EditMonitor - Overleaf CodeMirror 6 编辑监听器
@@ -302,8 +293,15 @@ export class EditMonitor {
     const ops: AnyOperation[] = [];
     let positionOffset = 0;
 
+    // Validate startState
+    if (!startState || typeof startState.sliceDoc !== 'function') {
+      console.warn('[EditMonitor] Invalid startState in convertChangesToOps');
+      return ops;
+    }
+
     // 遍历所有变更
     if (changes.iterChanges) {
+      // iterChanges available, proceed
       changes.iterChanges((
         fromA: number,
         toA: number,
@@ -333,6 +331,9 @@ export class EditMonitor {
           console.log(`[EditMonitor] Insert at ${fromB + positionOffset}: "${insertedText}"`);
         }
       });
+    } else {
+      console.warn('[EditMonitor] changes.iterChanges not available, cannot extract ops');
+      return ops;
     }
 
     return ops;
