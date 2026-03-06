@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Overleaf Mirror",
+  "version": "2.0.0",
+  "description": "Bidirectional file sync for Claude Code",
+  "permissions": ["cookies", "storage"],
+  "host_permissions": [
+    "https://*.overleaf.com/*",
+    "ws://localhost:3456/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://*.overleaf.com/project/*"],
+      "js": ["content.js"],
+      "run_at": "document_end"
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
