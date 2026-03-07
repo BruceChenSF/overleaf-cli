@@ -66,10 +66,10 @@ async function initializeMirror(): Promise<void> {
     // 🔧 新增：拦截文档获取请求
     interceptDocRequests();
 
-    // 🔧 新增：请求初始同步
-    requestInitialSync();
+    // 🔧 新增：请求初始同步（等待完成）
+    await requestInitialSync();
 
-    // 启动编辑监测
+    // 启动编辑监测（仅在初始同步完成后）
     if (projectId) {
       editMonitor = new EditMonitor(projectId, mirrorClient);
       editMonitor.start();
@@ -187,6 +187,22 @@ async function sendCookiesToServer(): Promise<void> {
 }
 
 /**
+ * 将 ArrayBuffer 转换为 Base64（避免堆栈溢出）
+ */
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const len = bytes.byteLength;
+
+  // 分块处理，避免堆栈溢出
+  for (let i = 0; i < len; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+
+  return btoa(binary);
+}
+
+/**
  * 请求初始同步（使用浏览器扩展直接执行同步）
  */
 async function requestInitialSync(): Promise<void> {
@@ -239,7 +255,7 @@ async function requestInitialSync(): Promise<void> {
         path: file.path,
         content_type: file.type,
         content: file.type === 'file'
-          ? btoa(String.fromCharCode(...(new Uint8Array(file.content as ArrayBuffer))))
+          ? arrayBufferToBase64(file.content as ArrayBuffer)
           : file.content,
         timestamp: Date.now()
       };

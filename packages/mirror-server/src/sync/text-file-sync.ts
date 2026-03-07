@@ -1,5 +1,5 @@
 import fs from 'fs-extra';
-import { join } from 'path';
+import path from 'path';
 import { FileSystemManager } from '../filesystem/manager';
 import { OverleafAPIClient } from '../api/overleaf-client';
 import { ProjectConfig } from '../config/types';
@@ -31,10 +31,27 @@ export class TextFileSyncManager {
 
     const docPath = doc_name;
 
+    // 🔍 调试信息：显示完整路径和项目路径
+    console.log(`[TextFileSync] 🔍 Checking file: ${docPath}`);
+    console.log(`[TextFileSync] 🔍 Project local path: ${this.projectConfig.localPath}`);
+    console.log(`[TextFileSync] 🔍 Full file path: ${path.join(this.projectConfig.localPath, docPath)}`);
+
     // Check if file exists locally
-    if (!await this.fileManager.fileExists(docPath)) {
-      console.log(`[TextFileSync] First edit for ${docPath}, fetching full content`);
-      await this.initialSync(doc_id, doc_name);
+    const exists = await this.fileManager.fileExists(docPath);
+    console.log(`[TextFileSync] 🔍 File exists: ${exists}`);
+
+    if (!exists) {
+      console.warn(`[TextFileSync] ⚠️ File ${docPath} does not exist locally (initial sync may not have completed yet)`);
+      console.warn(`[TextFileSync] ⏭️ Skipping edit event for ${docPath}`);
+
+      // 🔍 列出实际存在的文件
+      try {
+        const files = await fs.readdir(this.projectConfig.localPath);
+        console.log(`[TextFileSync] 🔍 Files in project root:`, files);
+      } catch (e) {
+        console.error(`[TextFileSync] ❌ Error listing directory:`, e);
+      }
+
       return;
     }
 
@@ -51,20 +68,27 @@ export class TextFileSyncManager {
         });
       }
 
-      console.log(`[TextFileSync] Applied ${ops.length} ops to ${docPath}`);
+      console.log(`[TextFileSync] ✅ Applied ${ops.length} ops to ${docPath}`);
     } catch (error) {
-      console.error(`[TextFileSync] Error applying ops to ${docPath}:`, error);
-
-      // Mark for full re-sync
-      console.log(`[TextFileSync] Marking ${docPath} for full re-sync`);
-      await this.initialSync(doc_id, doc_name);
+      console.error(`[TextFileSync] ❌ Error applying ops to ${docPath}:`, error);
+      // Don't try to re-sync via API - it doesn't work
+      // The file will be corrected on next page refresh/sync
     }
   }
 
   /**
    * Initial sync: fetch full document content and create file
+   *
+   * NOTE: This method is disabled because the Overleaf API endpoint
+   * /doc/{docId} does not work. Files are synced via browser-side
+   * WebSocket sync (see packages/extension/src/content/overleaf-sync.ts)
    */
   async initialSync(docId: string, docName: string): Promise<void> {
+    console.warn(`[TextFileSync] ⚠️ initialSync is disabled - Overleaf API endpoint does not work`);
+    console.warn(`[TextFileSync] Files are synced via browser-side WebSocket sync`);
+    throw new Error('initialSync is disabled - use browser-side sync instead');
+
+    /* Original implementation (disabled):
     try {
       const content = await this.apiClient.getDocContent(
         this.projectConfig.projectId,
@@ -78,6 +102,7 @@ export class TextFileSyncManager {
       console.error(`[TextFileSync] Failed to initial sync ${docName}:`, error);
       throw error;
     }
+    */
   }
 
   /**
@@ -129,8 +154,17 @@ export class TextFileSyncManager {
   /**
    * Verify and correct document by fetching fresh content from Overleaf
    * Called periodically or when errors occur
+   *
+   * NOTE: This method is disabled because the Overleaf API endpoint
+   * /doc/{docId} does not work. Files are synced via browser-side
+   * WebSocket sync instead. This method is kept for potential future use.
    */
   async verifyAndCorrect(docPath: string, docId: string): Promise<void> {
+    console.warn(`[TextFileSync] ⚠️ verifyAndCorrect is disabled - Overleaf API endpoint does not work`);
+    console.warn(`[TextFileSync] Files are synced via browser-side WebSocket sync`);
+    return;
+
+    /* Original implementation (disabled):
     try {
       const remoteContent = await this.apiClient.getDocContent(
         this.projectConfig.projectId,
@@ -146,6 +180,7 @@ export class TextFileSyncManager {
     } catch (error) {
       console.error(`[TextFileSync] Verify failed for ${docPath}:`, error);
     }
+    */
   }
 
   /**

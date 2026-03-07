@@ -179,29 +179,62 @@ export class EditMonitor {
    */
   private getDocName(): string {
     try {
-      // 方法 1: 从 URL 路径提取（格式：/project/{id}/doc 或 /project/{id}/doc/{filename}）
+      // 方法 1: 从 breadcrumbs 获取（最可靠）
+      // 选择器: #ol-cm-toolbar-wrapper > div.ol-cm-breadcrumbs
+      const breadcrumbsWrapper = document.querySelector('#ol-cm-toolbar-wrapper > div.ol-cm-breadcrumbs');
+      if (breadcrumbsWrapper) {
+        // 获取所有 div 元素（文件夹和文件名）
+        const divs = breadcrumbsWrapper.querySelectorAll('div');
+        if (divs && divs.length > 0) {
+          // 提取路径
+          const pathParts: string[] = [];
+          divs.forEach((div) => {
+            const text = div.textContent?.trim();
+            if (text) {
+              pathParts.push(text);
+            }
+          });
+
+          // 返回完整路径（包含文件夹）
+          if (pathParts.length > 0) {
+            const fullPath = pathParts.join('/');
+            const fileName = pathParts[pathParts.length - 1]; // 最后一个元素是文件名
+            console.log('[EditMonitor] ✅ Filename from breadcrumbs:', fullPath, '(file:', fileName, ')');
+            return fullPath;  // ✅ 返回完整路径
+          }
+        }
+      }
+
+      // 方法 2: 从 Overleaf 编辑器状态获取
+      if ((window as any).editor?.documentManager) {
+        const currentDoc = (window as any).editor.documentManager.getCurrentDoc();
+        if (currentDoc?.name) {
+          console.log('[EditMonitor] ✅ Filename from editor state:', currentDoc.name);
+          return currentDoc.name;
+        }
+      }
+
+      // 方法 3: 从 URL 路径提取（格式：/project/{id}/doc/{filename}）
       const urlPath = window.location.pathname;
       console.log('[EditMonitor] 🔍 Current URL path:', urlPath);
 
-      // 尝试匹配 /project/{id}/doc 或 /project/{id}/doc/{filename}
-      const pathMatch = urlPath.match(/\/project\/[^/]+\/doc(?:\/([^/]+))?$/);
+      const pathMatch = urlPath.match(/\/project\/[^/]+\/doc\/(.+)$/);
       if (pathMatch && pathMatch[1]) {
         console.log('[EditMonitor] ✅ Filename from URL:', pathMatch[1]);
         return pathMatch[1];
       }
 
-      // 方法 2: 从 DOM 中提取（Overleaf 会在某个元素中显示当前文件名）
-      // 查找包含文件名的元素
-      const fileNameElement = document.querySelector('.doc-name, [data-doc-name], .file-tree-selected .file-name');
-      if (fileNameElement) {
-        const fileName = fileNameElement.textContent?.trim();
+      // 方法 4: 从文件树 DOM 提取
+      const selectedFile = document.querySelector('.file-tree-selected .file-name');
+      if (selectedFile) {
+        const fileName = selectedFile.textContent?.trim();
         if (fileName) {
-          console.log('[EditMonitor] ✅ Filename from DOM:', fileName);
+          console.log('[EditMonitor] ✅ Filename from file tree:', fileName);
           return fileName;
         }
       }
 
-      // 方法 3: 从页面标题提取
+      // 方法 5: 从页面标题提取
       const titleMatch = document.title.match(/\[(.+?)\]/);
       if (titleMatch && titleMatch[1]) {
         console.log('[EditMonitor] ✅ Filename from title:', titleMatch[1]);
@@ -209,7 +242,7 @@ export class EditMonitor {
       }
 
       console.warn('[EditMonitor] ⚠️ Could not extract filename, using default');
-      return 'main.tex'; // 使用更常见的默认文件名
+      return 'main.tex';
     } catch (error) {
       console.error('[EditMonitor] ❌ Error extracting filename:', error);
       return 'main.tex';
