@@ -4,6 +4,9 @@ import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { ClientConnection } from './client-connection';
 import { FileWatcher } from './filesystem/watcher';
 import { handleEditMonitor } from './handlers/edit-monitor';
+import { ProjectConfigStore } from './config';
+import { OverleafAPIClient } from './api';
+import { TextFileSyncManager } from './sync';
 import type { WSMessage, SyncCommandMessage } from './types';
 import type { EditEventMessage } from '@overleaf-cc/shared';
 
@@ -14,6 +17,11 @@ export class MirrorServer {
   private httpServer: HttpServer;
   private connections: Map<WebSocket, ClientConnection> = new Map();
   private fileWatchers: Map<string, FileWatcher> = new Map();
+
+  // Add these:
+  private configStore: ProjectConfigStore;
+  private textSyncManagers: Map<string, TextFileSyncManager> = new Map();
+  private projectCookies: Map<string, Map<string, string>> = new Map();
 
   constructor(httpServer?: HttpServer) {
     // Create HTTP server for API endpoints
@@ -28,6 +36,10 @@ export class MirrorServer {
     });
 
     this.setupWebSocketServer();
+
+    // Initialize ProjectConfigStore
+    this.configStore = new ProjectConfigStore();
+    console.log('[Server] ProjectConfigStore initialized');
 
     // Start listening
     if (!httpServer) {
@@ -104,6 +116,23 @@ export class MirrorServer {
 
       connection.onMessage((message: WSMessage) => {
         console.log('[Server] Message received:', message.type);
+
+        // Handle cookies from mirror_request messages
+        if (message.type === 'mirror') {
+          const mirrorMsg = message as any;
+          if (mirrorMsg.cookies) {
+            const projectId = mirrorMsg.project_id;
+            const cookieMap = new Map<string, string>();
+            Object.entries(mirrorMsg.cookies).forEach(([key, value]) => {
+              if (typeof value === 'string') {
+                cookieMap.set(key, value);
+              }
+            });
+            this.projectCookies.set(projectId, cookieMap);
+            console.log(`[Server] Stored cookies for project ${projectId}`);
+          }
+        }
+
         this.handleMessage(connection, message);
       });
     });
@@ -119,7 +148,7 @@ export class MirrorServer {
         break;
       case 'edit_event':
         console.log('[Server] Routing to edit_event handler');
-        handleEditMonitor(message as EditEventMessage);
+        handleEditMonitor(message as EditEventMessage, this.configStore);
         break;
       case 'sync':
         const syncMessage = message as SyncCommandMessage;
