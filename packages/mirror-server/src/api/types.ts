@@ -11,23 +11,6 @@ export interface ProjectFile {
 }
 
 /**
- * API response for project file list
- */
-export interface ProjectFilesResponse {
-  files: ProjectFile[];
-  folders: ProjectFile[];
-}
-
-/**
- * Document content response
- */
-export interface DocContentResponse {
-  _id: string;
-  content: string;
-  version: number;
-}
-
-/**
  * Generic API error
  */
 export class OverleafAPIError extends Error {

@@ -1,16 +1,42 @@
 import fetch, { Response } from 'node-fetch';
-import { ProjectFile, DocContentResponse, OverleafAPIError } from './types';
+import { ProjectFile, OverleafAPIError } from './types';
 
+// NOTE: Using node-fetch@2.x because this is a CommonJS project.
+// node-fetch@3+ is ESM-only and incompatible with CommonJS.
+// When migrating to ESM, upgrade to node-fetch@3+ or use native fetch (Node 18+).
 const OVERLEAF_BASE_URL = 'https://cn.overleaf.com';
 
+/**
+ * Type guard to check if object has a 'files' property that is an array
+ */
+function hasFilesArray(data: unknown): data is { files: unknown[] } {
+  return (
+    typeof data === 'object' &&
+    data !== null &&
+    'files' in data &&
+    Array.isArray((data as { files: unknown }).files)
+  );
+}
+
 export class OverleafAPIClient {
-  constructor(private cookies: Map<string, string>) {}
+  constructor(
+    private cookies: Map<string, string>,
+    private baseUrl: string = OVERLEAF_BASE_URL
+  ) {}
 
   /**
    * Fetch document content by doc_id
    */
   async getDocContent(projectId: string, docId: string): Promise<string> {
-    const url = `${OVERLEAF_BASE_URL}/project/${projectId}/doc/${docId}`;
+    // Input validation
+    if (!projectId || typeof projectId !== 'string') {
+      throw new Error('projectId must be a non-empty string');
+    }
+    if (!docId || typeof docId !== 'string') {
+      throw new Error('docId must be a non-empty string');
+    }
+
+    const url = `${this.baseUrl}/project/${projectId}/doc/${docId}`;
 
     const response = await this.fetchWithAuth(url);
 
@@ -29,15 +55,44 @@ export class OverleafAPIClient {
       );
     }
 
-    const data = (await response.json()) as DocContentResponse;
-    return data.content;
+    let data: unknown;
+    try {
+      data = (await response.json()) as unknown;
+    } catch (error) {
+      throw new OverleafAPIError(
+        'Invalid response format: malformed JSON',
+        response.status,
+        url
+      );
+    }
+
+    // Validate response structure
+    if (
+      typeof data !== 'object' ||
+      data === null ||
+      !('content' in data) ||
+      typeof (data as { content: unknown }).content !== 'string'
+    ) {
+      throw new OverleafAPIError(
+        'Invalid response format: missing or invalid content field',
+        response.status,
+        url
+      );
+    }
+
+    return (data as { content: string }).content;
   }
 
   /**
    * Fetch complete project file list
    */
   async getProjectFiles(projectId: string): Promise<ProjectFile[]> {
-    const url = `${OVERLEAF_BASE_URL}/project/${projectId}/entities`;
+    // Input validation
+    if (!projectId || typeof projectId !== 'string') {
+      throw new Error('projectId must be a non-empty string');
+    }
+
+    const url = `${this.baseUrl}/project/${projectId}/entities`;
 
     const response = await this.fetchWithAuth(url);
 
@@ -49,14 +104,13 @@ export class OverleafAPIClient {
       );
     }
 
-    // Parse response based on actual API structure
-    const data = await response.json() as unknown;
+    const data = (await response.json()) as unknown;
 
-    // Handle different possible response formats
+    // Handle different possible response formats with proper type guards
     if (Array.isArray(data)) {
       return data as ProjectFile[];
-    } else if ((data as any).files && Array.isArray((data as any).files)) {
-      return (data as any).files;
+    } else if (hasFilesArray(data)) {
+      return data.files as ProjectFile[];
     } else {
       return [];
     }
@@ -66,7 +120,15 @@ export class OverleafAPIClient {
    * Fetch file content (for binary files)
    */
   async getFileContent(projectId: string, path: string): Promise<Buffer> {
-    const url = `${OVERLEAF_BASE_URL}/project/${projectId}/file/${path}`;
+    // Input validation
+    if (!projectId || typeof projectId !== 'string') {
+      throw new Error('projectId must be a non-empty string');
+    }
+    if (!path || typeof path !== 'string') {
+      throw new Error('path must be a non-empty string');
+    }
+
+    const url = `${this.baseUrl}/project/${projectId}/file/${encodeURIComponent(path)}`;
 
     const response = await this.fetchWithAuth(url);
 
@@ -85,9 +147,12 @@ export class OverleafAPIClient {
   /**
    * Make authenticated fetch request
    */
-  private async fetchWithAuth(url: string, options: any = {}): Promise<Response> {
+  private async fetchWithAuth(
+    url: string,
+    options: Record<string, unknown> = {}
+  ): Promise<Response> {
     const headers: Record<string, string> = {
-      ...(options.headers as Record<string, string>),
+      ...((options.headers as Record<string, string>) || {}),
       'Cookie': this.formatCookies(),
       'Accept': 'application/json'
     };
