@@ -4,6 +4,7 @@ import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { ClientConnection } from './client-connection';
 import { FileWatcher } from './filesystem/watcher';
 import { handleEditMonitor } from './handlers/edit-monitor';
+import { FileOperationHandler } from './handlers/file-operation';
 import { ProjectConfigStore } from './config';
 import { OverleafAPIClient } from './api';
 import { TextFileSyncManager } from './sync';
@@ -22,6 +23,7 @@ export class MirrorServer {
   private configStore: ProjectConfigStore;
   private textSyncManagers: Map<string, TextFileSyncManager> = new Map();
   private projectCookies: Map<string, Map<string, string>> = new Map();
+  private fileHandlers: Map<string, FileOperationHandler> = new Map();
 
   constructor(httpServer?: HttpServer) {
     // Create HTTP server for API endpoints
@@ -93,9 +95,32 @@ export class MirrorServer {
   }
 
   private handleMirrorRequest(data: any): void {
-    // For now, just log the request
-    // Later we'll implement actual Overleaf API handling
-    console.log('[HTTP] Received:', data.method, data.api_endpoint);
+    const { projectId, method, apiEndpoint, body } = data;
+
+    console.log('[HTTP] Received:', method, apiEndpoint);
+
+    // Get or create file handler for this project
+    let handler = this.fileHandlers.get(projectId);
+
+    if (!handler) {
+      const projectConfig = this.configStore.getProjectConfig(projectId);
+
+      // Get cookies for this project
+      const cookies = this.projectCookies.get(projectId);
+
+      if (!cookies) {
+        console.warn(`[HTTP] No cookies found for project ${projectId}, cannot handle request`);
+        return;
+      }
+
+      const apiClient = new OverleafAPIClient(cookies);
+      handler = new FileOperationHandler(projectConfig, apiClient);
+
+      this.fileHandlers.set(projectId, handler);
+    }
+
+    // Handle the request
+    handler.handleMirrorRequest({ projectId, method, apiEndpoint, body });
   }
 
   private setupWebSocketServer(): void {
