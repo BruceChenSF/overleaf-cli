@@ -173,7 +173,28 @@ export class MirrorServer {
         break;
       case 'edit_event':
         console.log('[Server] Routing to edit_event handler');
-        handleEditMonitor(message as EditEventMessage, this.configStore);
+
+        handleEditMonitor(
+          message as EditEventMessage,
+          this.configStore,
+          (projectId: string) => {
+            const cookies = this.projectCookies.get(projectId);
+            if (!cookies) {
+              console.warn(`[Server] No cookies for project ${projectId}`);
+              return null;
+            }
+            return new OverleafAPIClient(cookies);
+          },
+          (projectId: string, config: any, apiClient: OverleafAPIClient) => {
+            if (!this.textSyncManagers.has(projectId)) {
+              const manager = new TextFileSyncManager(config, apiClient);
+              this.textSyncManagers.set(projectId, manager);
+              console.log(`[Server] Created TextFileSyncManager for ${projectId}`);
+            }
+            return this.textSyncManagers.get(projectId)!;
+          }
+        );
+
         break;
       case 'sync':
         const syncMessage = message as SyncCommandMessage;

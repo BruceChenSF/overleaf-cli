@@ -2,13 +2,16 @@ import { EditEventMessage, AnyOperation } from '@overleaf-cc/shared';
 import { ProjectConfigStore } from '../config/store';
 import { OverleafAPIClient } from '../api/overleaf-client';
 import { TextFileSyncManager } from '../sync/text-file-sync';
+import { MirrorServer } from '../server';
 
 /**
  * Handle edit monitor events with real file system operations
  */
 export function handleEditMonitor(
   message: EditEventMessage,
-  configStore: ProjectConfigStore
+  configStore: ProjectConfigStore,
+  getAPIClient: (projectId: string) => OverleafAPIClient | null,
+  getTextSyncManager: (projectId: string, config: any, apiClient: OverleafAPIClient) => TextFileSyncManager
 ): void {
   const { project_id, data } = message;
 
@@ -46,8 +49,27 @@ export function handleEditMonitor(
 
     console.log('='.repeat(60) + '\n');
 
-    // TODO: Create TextFileSyncManager and apply ops
-    // This will be implemented in next task after cookie handling is complete
+    // Get API client for this project
+    const apiClient = getAPIClient(project_id);
+
+    if (!apiClient) {
+      console.warn('[EditMonitor] No API client available, skipping file operations');
+      console.warn('[EditMonitor] Please ensure browser extension sent cookies');
+      return;
+    }
+
+    // Get or create TextFileSyncManager
+    const textSyncManager = getTextSyncManager(
+      project_id,
+      projectConfig,
+      apiClient
+    );
+
+    // Handle the edit event
+    textSyncManager.handleEditEvent(data);
+
+    // Update last sync timestamp
+    configStore.updateLastSync(project_id);
 
   } catch (error) {
     console.error('[EditMonitor] Error handling edit event:', error);
