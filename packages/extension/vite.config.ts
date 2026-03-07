@@ -13,6 +13,7 @@ export default defineConfig({
       input: {
         content: resolve(__dirname, 'src/content/injector.ts'),
         background: resolve(__dirname, 'src/background/index.ts'),
+        'edit-monitor-bridge': resolve(__dirname, 'src/page/edit-monitor-bridge.js'),
       },
       output: {
         entryFileNames: '[name].js',

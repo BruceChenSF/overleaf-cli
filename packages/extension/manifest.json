@@ -25,6 +25,12 @@
   "background": {
     "service_worker": "dist/background.js"
   },
+  "web_accessible_resources": [
+    {
+      "resources": ["dist/edit-monitor-bridge.js"],
+      "matches": ["https://*.overleaf.com/*", "https://*.cn.overleaf.com/*"]
+    }
+  ],
   "icons": {
     "16": "icons/icon16.svg",
     "48": "icons/icon48.svg",
