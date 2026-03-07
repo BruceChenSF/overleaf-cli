@@ -37,7 +37,11 @@
       "Bash(find:*)",
       "Bash(test:*)",
       "Bash(ls:*)",
-      "Bash(Select-String:*)"
+      "Bash(Select-String:*)",
+      "Bash(if not exist \"C:\\\\Home\\\\CodeProjects\\\\overleaf-cc\\\\docs\\\\plans\" mkdir:*)",
+      "Bash(npm run lint:*)",
+      "Bash(npm run)",
+      "Bash(npm uninstall:*)"
     ]
   },
   "enabledPlugins": {

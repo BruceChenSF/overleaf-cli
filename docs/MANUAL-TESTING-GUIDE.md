@@ -5,6 +5,10 @@
 > **测试时间：** 预计 30-45 分钟
 >
 > **前置要求：** 已完成所有 10 个开发任务，测试全部通过
+>
+> **📚 相关文档：**
+> - [ARCHITECTURE.md](./ARCHITECTURE.md) - 快速了解项目架构
+> - [FILE-SYNC-ARCHITECTURE.md](./FILE-SYNC-ARCHITECTURE.md) - 详细文件同步架构说明
 
 ---
 
@@ -65,62 +69,65 @@ npm start
 
 ## 🧪 测试场景
 
-### 场景 1：首次编辑文档（文件创建）
+### 场景 1：首次打开项目（初始文件同步）
 
-**目标：** 验证首次编辑文档时，本地文件被自动创建
+**目标：** 验证打开 Overleaf 项目时，所有文件自动同步到本地
 
 **步骤：**
 
 1. **打开 Overleaf 项目**
    - 访问 https://cn.overleaf.com
    - 登录并打开一个项目
-   - 打开任意 `.tex` 文件
+   - 打开浏览器开发者工具（F12）→ Console 标签
 
-2. **观察 Mirror Server 日志**
-   ```
-   预期看到连接日志：
-   [Server] WebSocket client connected
-   [Server] Stored cookies for project {project_id}
-   ```
-
-3. **在 Overleaf 中编辑文档**
-   - 输入一些文本，例如：`Hello World`
-   - 等待 2-3 秒
-
-4. **检查 Mirror Server 日志**
+2. **观察浏览器控制台日志**
    ```
    预期看到：
-   ============================================================
-   [EditMonitor] Document edited: main.tex
-     Project ID: {project_id}
-     Local Path: C:\Users\{username}\overleaf-mirror\{project_id}\
-     Doc ID: {doc_id}
-     Version: {version}
-     Source: local
-     User ID: {user_id}
-     Time: 2026-03-07 22:30:45
-
-     Operations:
-       1. Insert "Hello World" at position 0
-   ============================================================
-
-   [Server] Created TextFileSyncManager for {project_id}
-   [TextFileSync] Created initial file: main.tex (12345 chars)
+   [Mirror] Initializing WebSocket connection...
+   [MirrorClient] Connected to server
+   [Mirror] 🍪 Sending cookies to Mirror Server...
+   [Mirror] 🍪 CSRF Token: abc123...
+   [Mirror] 🔄 Starting initial sync...
+   [Mirror] 🔌 Connecting to Overleaf WebSocket...
+   [Overleaf WS] ✅ Connected
+   [Overleaf WS] ✅ Processed 20 items in project
+   [Overleaf WS] 📥 Syncing: main.tex
+   [Overleaf WS] ✅ Synced 20 files from Overleaf
+   [Mirror] 📤 Sending files to mirror server...
+   [Mirror] ✅ Sent: main.tex (1234 chars)
+   [Mirror] ✅ Initial sync complete!
    ```
 
-5. **验证本地文件**
+3. **观察 Mirror Server 日志**
+   ```
+   预期看到：
+   [Server] New connection established
+   [Server] ✅ Stored 2 cookies for project {project_id}
+   [Server] ✅ Stored CSRF token for project {project_id}
+   [Server] 🔄 Starting initial sync for project: {project_id}
+   [Server] 📥 Received file sync: main.tex
+   [Server] ✅ Saved text file: main.tex (1234 chars) to C:\Users\...\main.tex
+   [Server] 📁 Created directory: C:\Users\...\figures
+   [Server] 📥 Received file sync: figures/duck.jpg
+   [Server] ✅ Saved binary file: figures/duck.jpg (12345 bytes) to ...
+   ```
+
+4. **验证本地文件**
    ```bash
    # Windows
    dir C:\Users\{username}\overleaf-mirror\{project_id}
 
-   # 或者查看文件内容
-   type C:\Users\{username}\overleaf-mirror\{project_id}\main.tex
+   # 查看文件树
+   tree C:\Users\{username}\overleaf-mirror\{project_id} /F
    ```
 
 **✅ 预期结果：**
 - 目录 `~/overleaf-mirror/{project_id}/` 被创建
-- 文件 `main.tex` 存在
-- 文件内容与 Overleaf 中一致
+- 所有项目文件都已同步（.tex, .bib, .jpg, .png 等）
+- 文件结构与 Overleaf 项目一致
+- 二进制文件（图片）正确保存
+
+**⏱️ 预计时间：** 5-15 秒（取决于文件数量和大小）
 
 ---
 

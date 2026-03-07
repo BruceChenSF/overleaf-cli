@@ -14,6 +14,15 @@
 
   // 劫持 send 方法
   WebSocket.prototype.send = function(data) {
+    // 🔍 调试：记录所有 WebSocket 消息（前几个）
+    if (!window.__overleaf_ws_msg_count) {
+      window.__overleaf_ws_msg_count = 0;
+    }
+    if (window.__overleaf_ws_msg_count < 5) {
+      console.log('[EditMonitorBridge] 🔍 WebSocket message sent:', String(data).substring(0, 200));
+      window.__overleaf_ws_msg_count++;
+    }
+
     // 调用原始方法
     const result = originalSend.apply(this, arguments);
 
@@ -23,9 +32,13 @@
 
       // 只处理包含 JSON 的消息
       const jsonMatch = dataStr.match(/\{.*\}$/);
-      if (!jsonMatch) return result;
+      if (!jsonMatch) {
+        console.log('[EditMonitorBridge] ⏭️ Skipped: No JSON found in message');
+        return result;
+      }
 
       const payload = JSON.parse(jsonMatch[0]);
+      console.log('[EditMonitorBridge] 🔍 Parsed payload:', payload.name || '(no name)');
 
       // 检查是否是编辑事件
       if (payload.name === 'applyOtUpdate' && payload.args) {
@@ -44,9 +57,13 @@
             version: updateObject.v
           }
         }, '*');
+
+        console.log('[EditMonitorBridge] ✅ Edit event sent to content script');
+      } else {
+        console.log('[EditMonitorBridge] ⏭️ Skipped: Not an edit event (name:', payload.name, ')');
       }
     } catch (error) {
-      // 忽略解析错误
+      console.error('[EditMonitorBridge] ❌ Error parsing message:', error);
     }
 
     return result;

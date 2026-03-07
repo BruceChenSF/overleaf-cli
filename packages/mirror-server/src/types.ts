@@ -9,7 +9,26 @@ export type WSMessage =
   | MirrorRequestMessage
   | SyncCommandMessage
   | AckMessage
-  | EditEventMessage;
+  | EditEventMessage
+  | BlobMappingMessage
+  | FileSyncMessage;
+
+export interface BlobMappingMessage {
+  type: 'blob_mapping';
+  project_id: string;
+  blob_hash: string;
+  filename: string;
+  url: string;
+}
+
+export interface FileSyncMessage {
+  type: 'file_sync';
+  project_id: string;
+  path: string;
+  content_type: 'doc' | 'file';
+  content: string; // Base64 encoded for files, plain text for docs
+  timestamp: number;
+}
 
 export interface MirrorRequestMessage {
   type: 'mirror';
@@ -22,8 +41,8 @@ export interface MirrorRequestMessage {
 export interface SyncCommandMessage {
   type: 'sync';
   project_id: string;
-  operation: 'create' | 'update' | 'delete' | 'rename';
-  path: string;
+  operation: 'create' | 'update' | 'delete' | 'rename' | 'initial_sync';
+  path?: string;
   content?: string;
   new_path?: string;
 }

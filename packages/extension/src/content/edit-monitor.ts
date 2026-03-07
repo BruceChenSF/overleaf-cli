@@ -151,7 +151,7 @@ export class EditMonitor {
         }
       };
 
-      // 构造消息
+      // 构造消息（不再包含 cookies，因为连接时已发送）
       const message = {
         type: 'edit_event' as const,
         project_id: this.projectId,
@@ -172,17 +172,48 @@ export class EditMonitor {
   /**
    * 获取当前文档名称
    *
+   * 从 DOM 中提取当前编辑的文件名
+   *
    * @returns string
    * @private
    */
   private getDocName(): string {
-    // 从 URL 路径提取文件名
-    const urlPath = window.location.pathname;
-    const match = urlPath.match(/\/project\/[^/]+\/(.+)$/);
-    if (match && match[1]) {
-      return match[1];
+    try {
+      // 方法 1: 从 URL 路径提取（格式：/project/{id}/doc 或 /project/{id}/doc/{filename}）
+      const urlPath = window.location.pathname;
+      console.log('[EditMonitor] 🔍 Current URL path:', urlPath);
+
+      // 尝试匹配 /project/{id}/doc 或 /project/{id}/doc/{filename}
+      const pathMatch = urlPath.match(/\/project\/[^/]+\/doc(?:\/([^/]+))?$/);
+      if (pathMatch && pathMatch[1]) {
+        console.log('[EditMonitor] ✅ Filename from URL:', pathMatch[1]);
+        return pathMatch[1];
+      }
+
+      // 方法 2: 从 DOM 中提取（Overleaf 会在某个元素中显示当前文件名）
+      // 查找包含文件名的元素
+      const fileNameElement = document.querySelector('.doc-name, [data-doc-name], .file-tree-selected .file-name');
+      if (fileNameElement) {
+        const fileName = fileNameElement.textContent?.trim();
+        if (fileName) {
+          console.log('[EditMonitor] ✅ Filename from DOM:', fileName);
+          return fileName;
+        }
+      }
+
+      // 方法 3: 从页面标题提取
+      const titleMatch = document.title.match(/\[(.+?)\]/);
+      if (titleMatch && titleMatch[1]) {
+        console.log('[EditMonitor] ✅ Filename from title:', titleMatch[1]);
+        return titleMatch[1];
+      }
+
+      console.warn('[EditMonitor] ⚠️ Could not extract filename, using default');
+      return 'main.tex'; // 使用更常见的默认文件名
+    } catch (error) {
+      console.error('[EditMonitor] ❌ Error extracting filename:', error);
+      return 'main.tex';
     }
-    return 'document.tex';
   }
 
   /**
