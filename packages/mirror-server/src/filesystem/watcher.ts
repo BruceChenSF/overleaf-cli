@@ -127,7 +127,7 @@ export class FileWatcher {
   private extractRelativePath(fullPath: string): string {
     return fullPath
       .replace(this.projectDir, '')
-      .replace(/^\/+/, '');
+      .replace(/^[\/\\]+/, '');  // Handle both forward slashes and Windows backslashes
   }
 }
 
