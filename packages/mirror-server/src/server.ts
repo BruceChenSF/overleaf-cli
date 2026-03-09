@@ -683,6 +683,10 @@ export class MirrorServer {
       console.log('[Server] ✅ Initial sync complete:', syncedCount, 'files downloaded to', projectConfig.localPath);
 
       // Start file sync if enabled
+      console.log(`[Server] 🔍 Checking file sync config...`);
+      console.log(`[Server] 🔍 enableFileSync value:`, projectConfig.enableFileSync);
+      console.log(`[Server] 🔍 Project config:`, JSON.stringify(projectConfig, null, 2));
+
       if (projectConfig.enableFileSync) {
         console.log('[Server] 🔄 File sync enabled, starting continuous sync...');
         this.startFileSync(projectId, docIdToPath);
@@ -703,32 +707,43 @@ export class MirrorServer {
    * @private
    */
   private startFileSync(projectId: string, docIdToPath: Map<string, any>): void {
-    console.log(`[Server] Starting file sync for project: ${projectId}`);
+    console.log(`[Server] 🔧 startFileSync() called for project: ${projectId}`);
+    console.log(`[Server] 🔧 docIdToPath has ${docIdToPath.size} entries`);
 
     // Stop existing file sync if already running
     if (this.fileWatchers.has(projectId) || this.syncManagers.has(projectId)) {
-      console.log(`[Server] Stopping existing file sync for project: ${projectId}`);
+      console.log(`[Server] 🔧 Stopping existing file sync for project: ${projectId}`);
       this.stopFileSync(projectId);
     }
 
     // Get project config
     const config = this.configStore.getProjectConfig(projectId);
+    console.log(`[Server] 🔧 Project config loaded:`, config ? 'Found' : 'Not found');
     if (!config || !config.localPath) {
       console.error(`[Server] ❌ No local path found for project: ${projectId}`);
+      console.error(`[Server] 🔧 Config:`, JSON.stringify(config, null, 2));
       return;
     }
 
+    console.log(`[Server] 🔧 Local path: ${config.localPath}`);
+    console.log(`[Server] 🔧 File sync enabled: ${config.enableFileSync}`);
+
     // Create FileWatcher
+    console.log(`[Server] 🔧 Creating FileWatcher...`);
     const fileWatcher = new FileWatcher(projectId, config.localPath);
 
     // Create SyncManager
+    console.log(`[Server] 🔧 Creating OverleafSyncManager...`);
     const syncManager = new OverleafSyncManager(projectId, this.config.port);
 
     // Initialize mappings
+    console.log(`[Server] 🔧 Initializing ${docIdToPath.size} mappings...`);
     syncManager.initializeMappings(docIdToPath);
 
     // Set up callback
+    console.log(`[Server] 🔧 Registering file change callback...`);
     fileWatcher.onChange((event: FileChangeEvent) => {
+      console.log(`[Server] 🔧 File change callback triggered:`, event);
       syncManager.handleFileChange(event);
     });
 
@@ -737,6 +752,7 @@ export class MirrorServer {
     this.syncManagers.set(projectId, syncManager);
 
     // Start watching
+    console.log(`[Server] 🔧 Starting file watcher...`);
     fileWatcher.start().catch((error) => {
       console.error(`[Server] ❌ Failed to start file watcher:`, error);
       // Clean up both instances

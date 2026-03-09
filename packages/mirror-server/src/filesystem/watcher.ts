@@ -29,7 +29,10 @@ export class FileWatcher {
    * Start watching the project directory for file changes
    */
   async start(): Promise<void> {
-    console.log(`[FileWatcher] Watching directory: ${this.projectDir}`);
+    console.log(`[FileWatcher] 🔧 start() called`);
+    console.log(`[FileWatcher] 🔧 Project ID: ${this.projectId}`);
+    console.log(`[FileWatcher] 🔧 Watching directory: ${this.projectDir}`);
+    console.log(`[FileWatcher] 🔧 Callback registered: ${this.onChangeCallback ? 'Yes' : 'No'}`);
 
     this.watcher = chokidar.watch(this.projectDir, {
       ignored: /(^|[\/\\])\../, // ignore dotfiles
@@ -37,10 +40,13 @@ export class FileWatcher {
       ignoreInitial: true, // Don't trigger for existing files
     });
 
+    console.log(`[FileWatcher] 🔧 Chokidar watcher created`);
+
     this.watcher
       .on('add', (path) => {
         const relativePath = this.extractRelativePath(path);
-        console.log(`[FileWatcher] File added: ${relativePath}`);
+        console.log(`[FileWatcher] ➕ File added: ${relativePath}`);
+        console.log(`[FileWatcher] 🔧 Full path: ${path}`);
         this.onChangeCallback?.({
           type: 'create',
           path: relativePath
@@ -48,7 +54,8 @@ export class FileWatcher {
       })
       .on('change', (path) => {
         const relativePath = this.extractRelativePath(path);
-        console.log(`[FileWatcher] File modified: ${relativePath}`);
+        console.log(`[FileWatcher] ✏️ File modified: ${relativePath}`);
+        console.log(`[FileWatcher] 🔧 Full path: ${path}`);
         this.onChangeCallback?.({
           type: 'update',
           path: relativePath
@@ -56,15 +63,21 @@ export class FileWatcher {
       })
       .on('unlink', (path) => {
         const relativePath = this.extractRelativePath(path);
-        console.log(`[FileWatcher] File deleted: ${relativePath}`);
+        console.log(`[FileWatcher] 🗑️ File deleted: ${relativePath}`);
+        console.log(`[FileWatcher] 🔧 Full path: ${path}`);
         this.onChangeCallback?.({
           type: 'delete',
           path: relativePath
         });
       })
       .on('error', (error) => {
-        console.error(`[FileWatcher] Watcher error: ${error}`);
+        console.error(`[FileWatcher] ❌ Watcher error: ${error}`);
+      })
+      .on('ready', () => {
+        console.log(`[FileWatcher] ✅ Watcher ready - monitoring directory`);
       });
+
+    console.log(`[FileWatcher] ✅ Event listeners registered`);
   }
 
   /**
