@@ -30,18 +30,14 @@ export class FileWatcher {
    * Start watching the project directory for file changes
    */
   async start(): Promise<void> {
-    console.log(`[FileWatcher] 🔧 start() called`);
-    console.log(`[FileWatcher] 🔧 Project ID: ${this.projectId}`);
-    console.log(`[FileWatcher] 🔧 Watching directory: ${this.projectDir}`);
-    console.log(`[FileWatcher] 🔧 Callback registered: ${this.onChangeCallback ? 'Yes' : 'No'}`);
+    console.log(`[FileWatcher] Starting file watcher for project ${this.projectId}`);
+    console.log(`[FileWatcher] Watching directory: ${this.projectDir}`);
 
     this.watcher = chokidar.watch(this.projectDir, {
       ignored: /(^|[\/\\])\../, // ignore dotfiles
       persistent: true,
       ignoreInitial: true, // Don't trigger for existing files
     });
-
-    console.log(`[FileWatcher] 🔧 Chokidar watcher created`);
 
     this.watcher
       .on('add', (path) => {
@@ -60,7 +56,6 @@ export class FileWatcher {
         }
 
         console.log(`[FileWatcher] ➕ File added: ${relativePath}`);
-        console.log(`[FileWatcher] 🔧 Full path: ${path}`);
         this.onChangeCallback?.({
           type: 'create',
           path: relativePath
@@ -69,15 +64,9 @@ export class FileWatcher {
       .on('change', (path) => {
         const relativePath = this.extractRelativePath(path);
 
-        console.log(`[FileWatcher] 🔍 File change detected`);
-        console.log(`[FileWatcher] 🔍 Full path: ${path}`);
-        console.log(`[FileWatcher] 🔍 Relative path: ${relativePath}`);
-        console.log(`[FileWatcher] 🔍 Checking marker file for: ${relativePath}`);
-
         // Check if this file is being synced by the server (marker file exists)
         // This now returns the syncId if being synced, null otherwise
         const syncId = isFileBeingSynced(this.projectDir, relativePath);
-        console.log(`[FileWatcher] 🔍 Sync ID: ${syncId}`);
 
         if (syncId) {
           console.log(`[FileWatcher] 🔇 Ignoring server save (marker file exists): ${relativePath}`);
@@ -89,7 +78,6 @@ export class FileWatcher {
         }
 
         console.log(`[FileWatcher] ✏️ File modified: ${relativePath}`);
-        console.log(`[FileWatcher] 🔧 Full path: ${path}`);
         this.onChangeCallback?.({
           type: 'update',
           path: relativePath
@@ -111,7 +99,6 @@ export class FileWatcher {
         }
 
         console.log(`[FileWatcher] 🗑️ File deleted: ${relativePath}`);
-        console.log(`[FileWatcher] 🔧 Full path: ${path}`);
         this.onChangeCallback?.({
           type: 'delete',
           path: relativePath
@@ -218,31 +205,16 @@ export function startFileSync(projectId: string, projectDir: string, filePath: s
   const markFileName = `.${normalizedPath}.syncing`;
   const markFilePath = join(projectDir, markFileName);
 
-  console.log(`[startFileSync] 🔧 Creating marker file`);
-  console.log(`[startFileSync] 🔧 Project ID: ${projectId}`);
-  console.log(`[startFileSync] 🔧 Project dir: ${projectDir}`);
-  console.log(`[startFileSync] 🔧 Original file path: ${filePath}`);
-  console.log(`[startFileSync] 🔧 Normalized file path: ${normalizedPath}`);
-  console.log(`[startFileSync] 🔧 Marker file name: ${markFileName}`);
-  console.log(`[startFileSync] 🔧 Marker file path: ${markFilePath}`);
-  console.log(`[startFileSync] 🔧 Sync ID: ${syncId}`);
-
   // Create marker file (this is a clear signal that we're saving this file)
   const fs = require('fs');
 
   // Ensure parent directory exists for the marker file
   const markerDir = path.dirname(markFilePath);
-  console.log(`[startFileSync] 🔧 Marker dir: ${markerDir}`);
-  console.log(`[startFileSync] 🔧 Marker dir exists: ${fs.existsSync(markerDir)}`);
-
   if (!fs.existsSync(markerDir)) {
-    console.log(`[startFileSync] 🔧 Creating marker dir: ${markerDir}`);
     fs.mkdirSync(markerDir, { recursive: true });
   }
 
-  console.log(`[startFileSync] 🔧 Writing marker file: ${markFilePath}`);
   fs.writeFileSync(markFilePath, syncId, 'utf8');
-  console.log(`[startFileSync] ✅ Marker file created successfully`);
 
   // Track this sync operation with state machine
   const syncOperation: SyncOperation = {
@@ -257,7 +229,7 @@ export function startFileSync(projectId: string, projectDir: string, filePath: s
   activeSyncs.set(syncId, syncOperation);
   filePathToSyncId.set(normalizedPath, syncId);
 
-  console.log(`[startFileSync] ✅ State: ${syncOperation.state}`);
+  console.log(`[startFileSync] Created marker for ${normalizedPath} (syncId: ${syncId})`);
 
   return syncId;
 }
@@ -345,16 +317,7 @@ export function isFileBeingSynced(projectDir: string, filePath: string): string 
   const markFileName = `.${filePath}.syncing`;
   const markFilePath = join(projectDir, markFileName);
 
-  console.log(`[isFileBeingSynced] 🔍 Checking for marker file`);
-  console.log(`[isFileBeingSynced] 🔍 Project dir: ${projectDir}`);
-  console.log(`[isFileBeingSynced] 🔍 File path: ${filePath}`);
-  console.log(`[isFileBeingSynced] 🔍 Marker file name: ${markFileName}`);
-  console.log(`[isFileBeingSynced] 🔍 Marker file path: ${markFilePath}`);
-
-  const exists = existsSync(markFilePath);
-  console.log(`[isFileBeingSynced] 🔍 Marker file exists: ${exists}`);
-
-  if (!exists) {
+  if (!existsSync(markFilePath)) {
     return null;
   }
 
@@ -362,22 +325,20 @@ export function isFileBeingSynced(projectDir: string, filePath: string): string 
   try {
     const fs = require('fs');
     const syncId = fs.readFileSync(markFilePath, 'utf8');
-    console.log(`[isFileBeingSynced] ✅ Found syncId: ${syncId}`);
 
     // Verify this sync is still active and in AWAITING_ACK state
     const sync = activeSyncs.get(syncId);
     if (sync && sync.state === SyncState.AWAITING_ACK) {
-      console.log(`[isFileBeingSynced] ✅ Sync is in AWAITING_ACK state, will send ACK`);
       return syncId;
     } else if (sync) {
-      console.log(`[isFileBeingSynced] ⚠️ Sync found but in unexpected state: ${sync.state}`);
+      console.warn(`[isFileBeingSynced] Sync found but in unexpected state: ${sync.state}`);
       return syncId; // Still return syncId to let ACK handle it
     } else {
-      console.log(`[isFileBeingSynced] ⚠️ Marker file exists but syncId not found in activeSyncs`);
+      console.warn(`[isFileBeingSynced] Marker file exists but syncId not found in activeSyncs`);
       return syncId; // Return syncId anyway, cleanup will handle stale markers
     }
   } catch (error) {
-    console.error(`[isFileBeingSynced] ❌ Error reading marker file:`, error);
+    console.error(`[isFileBeingSynced] Error reading marker file:`, error);
     return null;
   }
 }

@@ -46,7 +46,8 @@
       "Bash(npm run type-check:*)",
       "Bash(git stash:*)",
       "Bash(timeout:*)",
-      "Bash(exit:*)"
+      "Bash(exit:*)",
+      "Bash(del:*)"
     ]
   },
   "enabledPlugins": {
