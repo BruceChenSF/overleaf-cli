@@ -1,99 +1,344 @@
 # Overleaf Mirror
 
-Bidirectional file synchronization between Overleaf and local file system for Claude Code.
+> **Overleaf 到本地文件系统的实时双向同步工具**
 
-## Overview
+**当前状态**: ✅ Overleaf → 本地同步已完成 | 🚧 本地 → Overleaf 同步开发中
 
-Overleaf Mirror intercepts API calls from the Overleaf web interface and maintains a local mirror of your project files. This allows Claude Code to access and modify your Overleaf projects with real-time synchronization.
+---
 
-## Architecture
+## 🎯 项目概述
+
+Overleaf Mirror 是一个浏览器扩展 + 本地服务器的解决方案，能够实时将 Overleaf 项目同步到本地文件系统。这使得开发者可以在本地使用熟悉的工具（如 VS Code、Claude Code）编辑 LaTeX 项目，同时保持与 Overleaf 的同步。
+
+### 核心功能
+
+| 功能 | 状态 | 说明 |
+|------|------|------|
+| 📥 **初始同步** | ✅ 完成 | 打开 Overleaf 项目时自动同步所有文件 |
+| ✏️ **实时编辑同步** | ✅ 完成 | 监听 Overleaf 编辑操作，实时更新本地文件 |
+| ➕ **文件创建** | ✅ 完成 | Overleaf 中新建文件自动同步到本地 |
+| 🗑️ **文件删除** | ✅ 完成 | Overleaf 中删除文件自动同步到本地 |
+| ✏️ **文件重命名** | ✅ 完成 | Overleaf 中重命名文件自动同步到本地 |
+| 📤 **反向同步** | 🚧 开发中 | 本地编辑同步回 Overleaf（规划中） |
+
+---
+
+## 🏗️ 架构设计
+
+### 核心原理
+
+**使用浏览器扩展直接连接 Overleaf WebSocket API**，而不是从 Node.js 后端连接（会被 Overleaf 拒绝）。
 
 ```
-Overleaf Browser → Extension (API Interceptor)
-                           ↓
-                    WebSocket (ws://localhost:3456)
-                           ↓
-                  Local Mirror Server
-                           ↓
-                  File System (~/overleaf-mirror/)
-                           ↓
-                      Claude Code
+┌──────────────┐
+│ Overleaf 网页 │
+│  (用户编辑)   │
+└───────┬──────┘
+        │
+        ↓ WebSocket 消息监听
+┌─────────────────────────────────┐
+│    浏览器扩展 (Chrome Extension)  │
+│                                 │
+│  • OverleafWebSocketClient      │
+│  • 监听文件操作 (创建/删除/编辑)  │
+│  • 获取文件内容                  │
+└───────┬─────────────────────────┘
+        │
+        ↓ WebSocket
+┌──────────────┐
+│ Mirror Server│
+│  (Node.js)   │
+└───────┬──────┘
+        │
+        ↓
+┌───────────────┐
+│ 本地文件系统   │
+│ ~/overleaf-   │
+│ mirror/{id}/  │
+└───────────────┘
 ```
 
-## Quick Start
+### 为什么不用 Node.js 直接连接？
 
-### Installation
+❌ **Node.js → Overleaf WebSocket** - 连接被拒绝（错误码 `7:::1+0`）
+✅ **浏览器扩展 → Overleaf WebSocket** - 100% 兼容，继承页面认证
+
+---
+
+## 🚀 快速开始
+
+### 1. 安装依赖
 
 ```bash
-# Clone repository
-git clone https://github.com/yourusername/overleaf-cc.git
-cd overleaf-cc
+# 克隆项目
+git clone https://gitee.com/WHUBruceChen/claude-leaf.git
+cd claude-leaf
 
-# Install dependencies
+# 安装依赖
+npm install
+# 或使用 pnpm
 pnpm install
-
-# Build all packages
-pnpm build
 ```
 
-### Running the Mirror Server
+### 2. 构建项目
+
+```bash
+# 构建所有包
+npm run build
+# 或分别构建
+cd packages/extension && npm run build
+cd packages/mirror-server && npm run build
+```
+
+### 3. 启动 Mirror Server
 
 ```bash
 cd packages/mirror-server
 npm start
 ```
 
-Server will start on port 3456.
+服务器将在 `ws://localhost:3456` 启动。
 
-### Loading the Browser Extension
+### 4. 加载浏览器扩展
 
-1. Build the extension:
-   ```bash
-   cd packages/extension
-   npm run build
-   ```
+1. 打开 Chrome 浏览器
+2. 访问 `chrome://extensions/`
+3. 启用"开发者模式"（右上角开关）
+4. 点击"加载已解压的扩展程序"
+5. 选择 `packages/extension/dist` 目录
 
-2. Load in Chrome:
-   - Open `chrome://extensions/`
-   - Enable "Developer mode"
-   - Click "Load unpacked"
-   - Select `packages/extension/`
+### 5. 测试同步
 
-### Using with Claude Code
+1. 打开任何 Overleaf 项目（如 `https://cn.overleaf.com/project/xxxxx`）
+2. 查看服务器终端，应该看到同步日志
+3. 检查本地目录：`~/overleaf-mirror/{project-id}/`
+4. 所有文件应该已经同步到本地
 
-1. Open any Overleaf project
-2. Extension will automatically connect to local server
-3. Files will be mirrored to `~/overleaf-mirror/<project-id>/`
-4. Point Claude Code to this directory
-5. Changes made by Claude Code will sync back to Overleaf
+---
 
-## Documentation
+## 📂 项目结构
 
-- [Design Document](docs/plans/2026-03-06-overleaf-mirror-design.md)
-- [Implementation Plan](docs/plans/2026-03-06-overleaf-mirror-implementation.md)
-- [API Reference](docs/overleaf-api-reference.md)
-- [Testing Guide](docs/testing-guide.md)
+```
+overleaf-cc/
+├── packages/
+│   ├── extension/           # Chrome 浏览器扩展
+│   │   ├── src/
+│   │   │   ├── background/  # 后台脚本（cookies 处理）
+│   │   │   └── content/     # 内容脚本
+│   │   │       ├── overleaf-sync.ts  # Overleaf WebSocket 客户端
+│   │   │       ├── injector.ts       # 初始化和同步逻辑
+│   │   │       ├── edit-monitor.ts    # 编辑事件监听
+│   │   │       └── client.ts          # Mirror Server WebSocket 客户端
+│   │   └── dist/            # 构建输出
+│   │
+│   └── mirror-server/       # Node.js 后端服务器
+│       ├── src/
+│       │   ├── server.ts    # 主服务器
+│       │   ├── handlers/    # 消息处理器
+│       │   ├── sync/        # 同步管理器
+│       │   └── filesystem/  # 文件系统操作
+│       └── dist/            # 构建输出
+│
+└── docs/                    # 项目文档
+    ├── FILE-OPERATIONS-SYNC.md  # 文件操作同步详细说明
+    ├── ARCHITECTURE.md           # 架构设计
+    ├── FILE-SYNC-ARCHITECTURE.md # 文件同步架构
+    ├── overleaf-api-reference.md # Overleaf API 参考
+    └── MANUAL-TESTING-GUIDE.md   # 手动测试指南
+```
 
-## Troubleshooting
+---
 
-### Connection Issues
+## 📚 文档
 
-If the extension cannot connect to the server:
-- Ensure the mirror server is running on port 3456
-- Check browser console for error messages
-- Verify WebSocket is not blocked by firewall/antivirus
+### 核心文档（必读）
 
-### File Sync Issues
+| 文档 | 描述 | 阅读时间 |
+|------|------|---------|
+| **[FILE-OPERATIONS-SYNC.md](docs/FILE-OPERATIONS-SYNC.md)** | 文件操作同步完整方案 ⭐ | 15 分钟 |
+| **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** | 项目架构概览 | 5 分钟 |
+| **[FILE-SYNC-ARCHITECTURE.md](docs/FILE-SYNC-ARCHITECTURE.md)** | 文件同步详细架构 | 15 分钟 |
 
-If files are not syncing:
-- Check server logs for incoming requests
-- Verify file permissions in `~/overleaf-mirror/` directory
-- Try reloading the extension and reconnecting
+### API 和测试
 
-## Development
+| 文档 | 描述 |
+|------|------|
+| [overleaf-api-reference.md](docs/overleaf-api-reference.md) | Overleaf API 参考 |
+| [MANUAL-TESTING-GUIDE.md](docs/MANUAL-TESTING-GUIDE.md) | 手动测试指南 |
+| [api-documentation.md](docs/api-documentation.md) | 本项目 API 文档 |
 
-See [Testing Guide](docs/testing-guide.md) for manual testing instructions.
+### 其他
 
-## License
+| 文档 | 描述 |
+|------|------|
+| [INSTALLATION.md](docs/INSTALLATION.md) | 详细安装指南 |
+| [troubleshooting.md](docs/troubleshooting.md) | 故障排查 |
+| [known-issues.md](docs/known-issues.md) | 已知问题 |
 
-MIT
+---
+
+## 🔧 配置
+
+### Mirror Server 配置
+
+默认配置（在 `packages/mirror-server/src/config.ts`）：
+
+```typescript
+{
+  host: 'localhost',
+  port: 3456,
+  mirrorBasePath: '~/overleaf-mirror',  // Windows: 'C:/Users/{user}/overleaf-mirror'
+}
+```
+
+### 项目配置
+
+项目配置存储在：`~/.overleaf-cc/projects.json`
+
+```json
+{
+  "projects": [
+    {
+      "projectId": "69a6f132d255a33e681501a5",
+      "localPath": "C:/Users/pc/overleaf-mirror/69a6f132d255a33e681501a5",
+      "lastSync": 1709876543210
+    }
+  ]
+}
+```
+
+---
+
+## 🔍 工作原理
+
+### 初始同步流程
+
+1. 用户打开 Overleaf 项目页面
+2. 扩展初始化，连接到 Mirror Server
+3. 创建 `OverleafWebSocketClient` 连接到 Overleaf
+4. 接收 `joinProjectResponse` 获取文件列表
+5. 遍历所有文件：
+   - 文本文件：调用 `joinDoc()` → 获取内容 → `leaveDoc()`
+   - 二进制文件：调用 `downloadFile()` → 获取 ArrayBuffer
+6. 发送到 Mirror Server 保存到本地
+
+### 实时编辑同步
+
+1. 用户在 Overleaf 编辑文档
+2. `EditMonitor` 拦截 WebSocket 消息
+3. 检测 `applyOtUpdate` 事件（OT 操作）
+4. 提取操作列表（`ops`）和版本号
+5. 发送到 Mirror Server
+6. Mirror Server 应用操作到本地文件
+
+### 文件操作同步
+
+| 操作 | Overleaf 事件 | 处理流程 |
+|------|--------------|----------|
+| **创建** | `reciveNewDoc` | 更新映射 → 获取内容 → 创建本地文件 |
+| **删除** | `removeEntity` | 从映射获取路径 → 删除本地文件 |
+| **重命名** | `reciveEntityRename` | 获取旧路径 → 更新映射 → 重命名本地文件 |
+
+---
+
+## 🐛 故障排查
+
+### 扩展无法连接到服务器
+
+**检查清单**：
+- [ ] Mirror Server 是否运行在 `localhost:3456`？
+- [ ] 浏览器控制台是否有错误？
+- [ ] 防火墙是否阻止了 WebSocket 连接？
+
+**解决方法**：
+```bash
+# 重启服务器
+cd packages/mirror-server
+npm start
+
+# 重新加载扩展
+# 在 chrome://extensions/ 点击刷新按钮
+```
+
+### 文件没有同步
+
+**检查清单**：
+- [ ] 是否已登录 Overleaf？
+- [ ] 浏览器控制台是否有 `[Mirror]` 日志？
+- [ ] 本地目录权限是否正确？
+
+**解决方法**：
+```bash
+# 检查服务器日志
+# 应该看到 "[Server] 📥 Received file sync: xxx.tex"
+
+# 手动触发重新同步
+# 刷新 Overleaf 页面
+```
+
+### 查看详细日志
+
+**浏览器日志**：
+- 打开开发者工具（F12）
+- 查看 Console 标签
+- 筛选 `[Mirror]` 或 `[Overleaf WS]`
+
+**服务器日志**：
+- 查看 Mirror Server 终端输出
+- 所有日志都有前缀标记
+
+---
+
+## 🧪 测试
+
+### 手动测试
+
+详细的测试指南请参考：[MANUAL-TESTING-GUIDE.md](docs/MANUAL-TESTING-GUIDE.md)
+
+**快速测试**：
+1. 创建新 Overleaf 项目
+2. 添加一些文件（`.tex`, `.bib`, 图片）
+3. 编辑文件内容
+4. 删除/重命名文件
+5. 检查本地目录是否正确同步
+
+---
+
+## 🚧 开发路线图
+
+### Phase 1: Overleaf → 本地同步 ✅
+- [x] 初始文件同步
+- [x] 实时编辑同步
+- [x] 文件创建同步
+- [x] 文件删除同步
+- [x] 文件重命名同步
+
+### Phase 2: 本地 → Overleaf 同步（规划中）
+- [ ] 本地文件变化监控
+- [ ] 文件编辑推送到 Overleaf
+- [ ] 文件创建推送到 Overleaf
+- [ ] 文件删除推送到 Overleaf
+- [ ] 冲突解决机制
+
+### Phase 3: 增强功能（未来）
+- [ ] 多项目支持
+- [ ] 选择性同步（忽略特定文件）
+- [ ] 同步历史记录
+- [ ] 性能优化（大文件、二进制文件）
+
+---
+
+## 📄 许可证
+
+MIT License
+
+---
+
+## 🤝 贡献
+
+欢迎提交 Issue 和 Pull Request！
+
+---
+
+**最后更新**: 2026-03-09
+**维护者**: Overleaf Mirror Team

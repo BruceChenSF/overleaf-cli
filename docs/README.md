@@ -8,9 +8,23 @@
 
 如果你是新来的开发 Agent 或用户，**强烈建议按以下顺序阅读**：
 
-### 1. [ARCHITECTURE.md](./ARCHITECTURE.md) ⭐⭐⭐
+### 1. [主 README.md](../README.md) ⭐⭐⭐
 **阅读时间**: 5 分钟
 **重要性**: 🔥 **必读**
+
+**内容概要**:
+- 项目概述和功能状态
+- 快速安装和使用指南
+- 项目结构说明
+- 故障排查基础
+
+**适合人群**: 所有人（必读）
+
+---
+
+### 2. [ARCHITECTURE.md](./ARCHITECTURE.md) ⭐⭐⭐
+**阅读时间**: 5 分钟
+**重要性**: 🔥 **核心架构**
 
 **内容概要**:
 - 项目架构一图览
@@ -22,102 +36,91 @@
 
 ---
 
-### 🔥🔥🔥 [TECHNICAL-SOLUTION.md](./TECHNICAL-SOLUTION.md) ⭐⭐⭐⭐⭐
-**阅读时间**: 20 分钟
+### 3. [FILE-OPERATIONS-SYNC.md](./FILE-OPERATIONS-SYNC.md) ⭐⭐⭐⭐⭐
+**阅读时间**: 15 分钟
 **重要性**: 🔥🔥🔥 **最新完整技术方案**
 
 **内容概要**:
-- ✅ **核心功能已实现** - 初始同步 + 实时编辑同步
-- 🏗️ 完整架构图和系统设计
-- 🐛 所有关键 Bug 的详细修复过程
-- 📦 消息格式和数据结构
-- 🧪 测试状态和性能指标
-- 🚀 部署和使用指南
+- ✅ 文件创建、删除、重命名的完整实现
+- 🏗️ 详细的数据流向图
+- 🗺️ docIdToPath 映射表说明
+- 📦 所有消息类型定义
+- 🧪 测试指南和调试技巧
 
-**适合人群**: 开发者、AI Agent、架构师（**强烈推荐优先阅读**）
+**适合人群**: 开发者、AI Agent（**强烈推荐优先阅读**）
 
 ---
 
-### 2. [FILE-SYNC-ARCHITECTURE.md](./FILE-SYNC-ARCHITECTURE.md) ⭐⭐⭐
-**阅读时间**: 15 分钟
-**重要性**: 🔥 **核心架构文档**
+## 📖 核心技术文档
 
-**内容概要**:
+### [FILE-SYNC-ARCHITECTURE.md](./FILE-SYNC-ARCHITECTURE.md) ⭐⭐⭐
+**阅读时间**: 15 分钟
+
 - 详细的架构决策过程
 - 为什么 Node.js 后端无法连接 Overleaf WebSocket
 - 完整的数据流和消息格式
 - 错误处理和性能考虑
 
-**适合人群**: 开发者、架构师
+### [overleaf-api-reference.md](./overleaf-api-reference.md) ⭐⭐
+**阅读时间**: 20 分钟
+
+- Overleaf API 完整参考
+- 所有相关端点说明
+- 请求/响应格式
+- 认证机制详解
 
 ---
 
-## 📖 详细文档
+## 🧪 测试文档
 
-### 3. [MANUAL-TESTING-GUIDE.md](./MANUAL-TESTING-GUIDE.md) ⭐⭐
+### [MANUAL-TESTING-GUIDE.md](./MANUAL-TESTING-GUIDE.md) ⭐⭐
 **阅读时间**: 10 分钟
-**重要性**: 测试和验证
 
-**内容概要**:
-- 测试前准备
-- 8 个测试场景详解
-- 预期结果和验证方法
-- 故障排查指南
-
-**适合人群**: 测试人员、用户、开发者
+- 手动测试完整流程
+- 测试用例和预期结果
+- 常见问题诊断
 
 ---
 
-### 4. [PROGRESS-REPORT.md](./PROGRESS-REPORT.md) ⭐
-**阅读时间**: 10 分钟
-**重要性**: 项目进度跟踪
+## 📋 项目管理文档
 
-**内容概要**:
-- 已完成功能列表
-- 待办事项
-- 已知问题和限制
-- 单元测试覆盖率
+### [PROGRESS-REPORT.md](./PROGRESS-REPORT.md) ⭐⭐
+**最后更新**: 2026-03-09
 
-**适合人群**: 项目管理者、开发者
+- 当前开发进度（90% 完成）
+- Phase 1 所有功能详细说明
+- Phase 2 开发计划
+- 性能指标和测试状态
 
----
+### [INSTALLATION.md](./INSTALLATION.md) ⭐
+**阅读时间**: 5 分钟
 
-## 🗂️ 文档分类
+- 详细安装步骤
+- 依赖说明
+- 平台特定注意事项
 
-### 按角色分类
+### [troubleshooting.md](./troubleshooting.md) ⭐
+**阅读时间**: 5 分钟
 
-#### 👨‍💻 开发者
-- [ARCHITECTURE.md](./ARCHITECTURE.md) - 快速了解项目
-- [FILE-SYNC-ARCHITECTURE.md](./FILE-SYNC-ARCHITECTURE.md) - 深入理解架构
-- [PROGRESS-REPORT.md](./PROGRESS-REPORT.md) - 了解项目状态
+- 常见问题解决
+- 错误诊断方法
+- 调试技巧
 
-#### 🧪 测试人员
-- [MANUAL-TESTING-GUIDE.md](./MANUAL-TESTING-GUIDE.md) - 测试指南
-- [ARCHITECTURE.md](./ARCHITECTURE.md) - 理解系统行为
+### [known-issues.md](./known-issues.md)
+**阅读时间**: 3 分钟
 
-#### 👤 用户
-- [ARCHITECTURE.md](./ARCHITECTURE.md) - 了解工作原理
-- [MANUAL-TESTING-GUIDE.md](./MANUAL-TESTING-GUIDE.md) - 验证功能
-
-#### 🤖 AI Agent
-- [ARCHITECTURE.md](./ARCHITECTURE.md) - **首选**，快速理解架构
-- [FILE-SYNC-ARCHITECTURE.md](./FILE-SYNC-ARCHITECTURE.md) - 详细技术实现
-- [MANUAL-TESTING-GUIDE.md](./MANUAL-TESTING-GUIDE.md) - 测试验证
+- 当前已知问题
+- 限制和注意事项
+- 临时解决方案
 
 ---
 
-### 按主题分类
+## 📂 计划目录（`docs/plans/`）
 
-#### 架构设计
-- [ARCHITECTURE.md](./ARCHITECTURE.md) - 架构概览
-- [FILE-SYNC-ARCHITECTURE.md](./FILE-SYNC-ARCHITECTURE.md) - 文件同步详细设计
+历史设计和实现计划文档，供参考使用：
 
-#### 测试和质量
-- [MANUAL-TESTING-GUIDE.md](./MANUAL-TESTING-GUIDE.md) - 手动测试指南
-- [PROGRESS-REPORT.md](./PROGRESS-REPORT.md) - 测试覆盖率
-
-#### 项目管理
-- [PROGRESS-REPORT.md](./PROGRESS-REPORT.md) - 项目进度报告
+- `2026-03-06-overleaf-mirror-design.md` - 原始设计文档
+- `2026-03-06-overleaf-mirror-implementation.md` - 实现计划
 
 ---
 
@@ -125,106 +128,60 @@
 
 ### 我想了解...
 
-| 问题 | 推荐文档 |
-|------|---------|
-| 项目如何工作？ | [ARCHITECTURE.md](./ARCHITECTURE.md) |
-| 为什么用浏览器扩展同步？ | [FILE-SYNC-ARCHITECTURE.md](./FILE-SYNC-ARCHITECTURE.md) ⭐️ |
-| 如何测试功能？ | [MANUAL-TESTING-GUIDE.md](./MANUAL-TESTING-GUIDE.md) |
-| 有哪些已知问题？ | [PROGRESS-REPORT.md](./PROGRESS-REPORT.md) |
-| 关键代码文件在哪？ | [ARCHITECTURE.md](./ARCHITECTURE.md) - "关键代码文件" |
-| 消息格式是什么？ | [FILE-SYNC-ARCHITECTURE.md](./FILE-SYNC-ARCHITECTURE.md) - "数据流" |
-| 如何开始开发？ | [ARCHITECTURE.md](./ARCHITECTURE.md) - "快速开始" |
-| 同步失败怎么办？ | [MANUAL-TESTING-GUIDE.md](./MANUAL-TESTING-GUIDE.md) - "常见问题" |
+| 我想了解 | 查看文档 |
+|---------|---------|
+| **项目是什么** | [README.md](../README.md) |
+| **如何安装使用** | [README.md](../README.md#快速开始) |
+| **架构设计** | [ARCHITECTURE.md](./ARCHITECTURE.md) |
+| **文件同步原理** | [FILE-SYNC-ARCHITECTURE.md](./FILE-SYNC-ARCHITECTURE.md) |
+| **文件操作实现** | [FILE-OPERATIONS-SYNC.md](./FILE-OPERATIONS-SYNC.md) |
+| **Overleaf API** | [overleaf-api-reference.md](./overleaf-api-reference.md) |
+| **如何测试** | [MANUAL-TESTING-GUIDE.md](./MANUAL-TESTING-GUIDE.md) |
+| **当前进度** | [PROGRESS-REPORT.md](./PROGRESS-REPORT.md) |
+| **遇到问题** | [troubleshooting.md](./troubleshooting.md) |
 
 ---
 
-## 📝 文档维护
+## 📊 文档状态
 
-### 文档更新原则
-
-1. **代码变更同步更新**: 架构变更时立即更新相关文档
-2. **版本标记**: 每个文档顶部标注最后更新日期和版本
-3. **交叉引用**: 文档之间相互引用，形成知识网络
-4. **示例驱动**: 多用代码示例、日志示例、配置示例
-
-### 文档优先级
-
-- 🔥 **高优先级**: [ARCHITECTURE.md](./ARCHITECTURE.md)、[FILE-SYNC-ARCHITECTURE.md](./FILE-SYNC-ARCHITECTURE.md)
-  - 这些文档是其他 Agent 理解项目的基础
-  - 必须保持最新和准确
-
-- ⚠️ **中优先级**: [MANUAL-TESTING-GUIDE.md](./MANUAL-TESTING-GUIDE.md)
-  - 用于验证功能
-  - 随功能更新而更新
-
-- 📊 **低优先级**: [PROGRESS-REPORT.md](./PROGRESS-REPORT.md)
-  - 项目跟踪用
-  - 定期更新即可
+| 文档 | 状态 | 最后更新 | 准确性 |
+|------|------|---------|--------|
+| README.md | ✅ 最新 | 2026-03-09 | 100% |
+| ARCHITECTURE.md | ✅ 最新 | 2026-03-08 | 100% |
+| FILE-OPERATIONS-SYNC.md | ✅ 最新 | 2026-03-09 | 100% |
+| FILE-SYNC-ARCHITECTURE.md | ✅ 最新 | 2026-03-08 | 100% |
+| PROGRESS-REPORT.md | ✅ 最新 | 2026-03-09 | 100% |
+| overleaf-api-reference.md | ✅ 稳定 | 2026-03-06 | 100% |
+| MANUAL-TESTING-GUIDE.md | ✅ 稳定 | 2026-03-08 | 100% |
+| INSTALLATION.md | ✅ 稳定 | 2026-03-03 | 100% |
+| troubleshooting.md | ✅ 稳定 | 2026-03-06 | 100% |
+| known-issues.md | ⚠️ 需更新 | 2026-03-03 | 80% |
 
 ---
 
-## 🤝 AI Agent 使用指南
+## 🗂️ 已清理的文档
 
-### 给 AI Agent 的建议
+以下文档已被移除（过时或不再需要）：
 
-如果你是 AI Agent（如 Claude Code、GitHub Copilot 等），请按以下顺序使用文档：
-
-1. **首先**: 阅读 [ARCHITECTURE.md](./ARCHITECTURE.md)（5 分钟）
-   - 理解核心架构
-   - 知道关键文件位置
-   - 了解设计决策
-
-2. **然后**: 根据任务选择深入阅读
-   - 修改文件同步逻辑 → [FILE-SYNC-ARCHITECTURE.md](./FILE-SYNC-ARCHITECTURE.md)
-   - 添加新功能 → [PROGRESS-REPORT.md](./PROGRESS-REPORT.md)
-   - 修复 bug → [MANUAL-TESTING-GUIDE.md](./MANUAL-TESTING-GUIDE.md)
-
-3. **最后**: 参考代码实现
-   - 查看 packages/extension/src/content/overleaf-sync.ts
-   - 查看 packages/mirror-server/src/server.ts
-
-### 常见任务参考
-
-| 任务 | 参考文档 | 关键文件 |
-|------|---------|---------|
-| 修改同步逻辑 | [FILE-SYNC-ARCHITECTURE.md](./FILE-SYNC-ARCHITECTURE.md) | overleaf-sync.ts, server.ts |
-| 添加新消息类型 | [FILE-SYNC-ARCHITECTURE.md](./FILE-SYNC-ARCHITECTURE.md) - "消息格式" | types.ts |
-| 优化性能 | [FILE-SYNC-ARCHITECTURE.md](./FILE-SYNC-ARCHITECTURE.md) - "性能考虑" | overleaf-sync.ts |
-| 修复认证问题 | [FILE-SYNC-ARCHITECTURE.md](./FILE-SYNC-ARCHITECTURE.md) - "为什么选择浏览器端同步" | injector.ts |
-| 添加测试 | [MANUAL-TESTING-GUIDE.md](./MANUAL-TESTING-GUIDE.md) | *.test.ts |
+- ❌ `diagnostics-new-editor.md` - 新编辑器调试，已解决
+- ❌ `diagnostics-overleaf-api.md` - API 诊断，已过时
+- ❌ `postmortem-api-interception.md` - API 拦截复盘，方案已废弃
+- ❌ `test-codemirror6-fix.md` - CodeMirror 修复测试，已完成
+- ❌ `test-socket-interception.md` - Socket 拦截测试，已替代
+- ❌ `quick-test.md` - 临时测试文档
 
 ---
 
-## 📊 文档统计
+## 🤝 文档贡献
 
-| 文档 | 行数 | 阅读时间 | 最后更新 |
-|------|------|---------|---------|
-| README.md (本文件) | ~400 | 5 分钟 | 2026-03-08 |
-| ARCHITECTURE.md | ~500 | 5 分钟 | 2026-03-08 |
-| FILE-SYNC-ARCHITECTURE.md | ~800 | 15 分钟 | 2026-03-08 |
-| MANUAL-TESTING-GUIDE.md | ~600 | 10 分钟 | 2026-03-08 |
-| PROGRESS-REPORT.md | ~400 | 10 分钟 | - |
+如果你发现文档有错误或需要补充：
 
-**总阅读时间**: ~45 分钟
+1. 检查文档是否准确反映当前代码
+2. 更新文档内容
+3. 更新"最后更新"日期
+4. 提交 PR
 
 ---
 
-## 🔗 外部资源
-
-### 相关技术
-- [Socket.io 0.9.x 文档](https://socket.io/docs/4.0/)
-- [Chrome Extension API](https://developer.chrome.com/docs/extensions/)
-- [WebSocket API](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket)
-- [Operational Transformation](https://en.wikipedia.org/wiki/Operational_transformation)
-
-### 项目链接
-- GitHub Repository (待添加)
-- Issue Tracker (待添加)
-- Release Notes (待添加)
-
----
-
-**文档维护**: 本索引由 AI Agent 自动维护。如有新增文档，请及时更新。
-
-**最后更新**: 2026-03-08
-**维护者**: Claude Code Assistant
+**文档维护**: Overleaf Mirror Team
+**最后更新**: 2026-03-09
