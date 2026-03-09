@@ -1,6 +1,7 @@
 import { MirrorClient } from '../client';
 import { EditMonitor } from './edit-monitor';
 import { OverleafWebSocketClient } from './overleaf-sync';
+import { OverleafAPIHandler } from './overleaf-api-handler';
 
 let mirrorClient: MirrorClient | null = null;
 let editMonitor: EditMonitor | null = null;
@@ -73,7 +74,20 @@ async function initializeMirror(): Promise<void> {
       editMonitor.start();
     }
 
-    console.log('[Mirror] ✅ Initialization complete');
+    // Create API Handler
+    const apiHandler = new OverleafAPIHandler(mirrorClient, projectId);
+
+    // Register message handler
+    mirrorClient.onMessage((message: any) => {
+      if (message.type === 'sync_to_overleaf') {
+        console.log('[Mirror] Received sync_to_overleaf request:', message);
+        apiHandler.handleSyncRequest(message);
+      }
+    });
+
+    console.log('[Mirror] ✅ Overleaf API Handler registered');
+
+    console.log('[Mirror] ✅ Initialization complete (including Overleaf sync)');
   } catch (error) {
     console.error('[Mirror] ❌ Initialization failed:', error);
   }
