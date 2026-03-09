@@ -11,7 +11,34 @@ export type WSMessage =
   | AckMessage
   | EditEventMessage
   | BlobMappingMessage
-  | FileSyncMessage;
+  | FileSyncMessage
+  | FileCreatedMessage
+  | FileDeletedMessage
+  | FileRenamedMessage;
+
+export interface FileCreatedMessage {
+  type: 'file_created';
+  project_id: string;
+  file_name: string;
+  file_id: string;
+  timestamp: number;
+}
+
+export interface FileDeletedMessage {
+  type: 'file_deleted';
+  project_id: string;
+  file_id: string;
+  timestamp: number;
+}
+
+export interface FileRenamedMessage {
+  type: 'file_renamed';
+  project_id: string;
+  old_name: string;
+  new_name: string;
+  file_id: string;
+  timestamp: number;
+}
 
 export interface BlobMappingMessage {
   type: 'blob_mapping';

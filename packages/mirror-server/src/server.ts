@@ -100,9 +100,19 @@ export class MirrorServer {
   }
 
   private handleMirrorRequest(data: any): void {
-    const { projectId, method, apiEndpoint, body } = data;
+    // Handle both snake_case and camelCase field names
+    const projectId = data.project_id || data.projectId;
+    const method = data.method;
+    const apiEndpoint = data.api_endpoint || data.apiEndpoint;
+    const body = data.data || data.body;
 
     console.log('[HTTP] Received:', method, apiEndpoint);
+    console.log('[HTTP] Request data:', JSON.stringify(data, null, 2));
+
+    if (!projectId) {
+      console.error('[HTTP] Missing project_id in request');
+      return;
+    }
 
     // Get or create file handler for this project
     let handler = this.fileHandlers.get(projectId);
@@ -246,6 +256,24 @@ export class MirrorServer {
         console.log('[Server] 📋 Received blob mapping:', blobMsg.filename, '->', blobMsg.blob_hash);
         this.handleBlobMapping(blobMsg.project_id, blobMsg.blob_hash, blobMsg.filename);
         break;
+      case 'file_created':
+        // 🔧 处理文件创建
+        const fileCreatedMsg = message as any;
+        console.log('[Server] ➕ Received file creation event:', fileCreatedMsg.file_name);
+        this.handleFileCreated(fileCreatedMsg.project_id, fileCreatedMsg.file_name);
+        break;
+      case 'file_deleted':
+        // 🔧 处理文件删除
+        const fileDeletedMsg = message as any;
+        console.log('[Server] 🗑️ Received file deletion event:', fileDeletedMsg.file_id);
+        this.handleFileDeleted(fileDeletedMsg.project_id, fileDeletedMsg.file_id);
+        break;
+      case 'file_renamed':
+        // 🔧 处理文件重命名
+        const fileRenamedMsg = message as any;
+        console.log('[Server] ✏️ Received file rename event:', fileRenamedMsg.old_name, '->', fileRenamedMsg.new_name);
+        this.handleFileRenamed(fileRenamedMsg.project_id, fileRenamedMsg.old_name, fileRenamedMsg.new_name);
+        break;
       default:
         console.warn('Unknown message type:', message);
     }
@@ -386,6 +414,102 @@ export class MirrorServer {
       }
     } catch (error) {
       console.error('[Server] ❌ Failed to save file:', path, error);
+    }
+  }
+
+  /**
+   * 处理文件创建事件
+   *
+   * @param projectId - 项目 ID
+   * @param fileName - 文件名
+   * @private
+   */
+  private handleFileCreated(projectId: string, fileName: string): void {
+    try {
+      console.log('[Server] ➕ Creating file:', fileName);
+
+      const projectConfig = this.configStore.getProjectConfig(projectId);
+      const fs = require('fs');
+      const pathModule = require('path');
+      const filePath = pathModule.join(projectConfig.localPath, fileName);
+
+      // 检查文件是否已存在
+      if (fs.existsSync(filePath)) {
+        console.log('[Server] ⚠️ File already exists:', fileName, '(skipping)');
+        return;
+      }
+
+      // 确保目录存在
+      const dir = pathModule.dirname(filePath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+
+      // 创建空文件
+      fs.writeFileSync(filePath, '', 'utf8');
+      console.log('[Server] ✅ Created empty file:', fileName);
+    } catch (error) {
+      console.error('[Server] ❌ Failed to create file:', fileName, error);
+    }
+  }
+
+  /**
+   * 处理文件删除事件
+   *
+   * @param projectId - 项目 ID
+   * @param fileId - 文件 ID
+   * @private
+   */
+  private handleFileDeleted(projectId: string, fileId: string): void {
+    try {
+      console.log('[Server] 🗑️ Deleting file with ID:', fileId);
+
+      // TODO: 实现 fileId 到 fileName 的映射
+      // 目前我们无法直接从 file_id 找到文件路径
+      // 需要维护一个 _id -> path 的映射表
+
+      console.log('[Server] ⚠️ File deletion requires _id to path mapping, not yet implemented');
+    } catch (error) {
+      console.error('[Server] ❌ Failed to delete file:', fileId, error);
+    }
+  }
+
+  /**
+   * 处理文件重命名事件
+   *
+   * @param projectId - 项目 ID
+   * @param oldName - 旧文件名
+   * @param newName - 新文件名
+   * @private
+   */
+  private handleFileRenamed(projectId: string, oldName: string, newName: string): void {
+    try {
+      console.log('[Server] ✏️ Renaming file:', oldName, '->', newName);
+
+      const projectConfig = this.configStore.getProjectConfig(projectId);
+      const fs = require('fs');
+      const pathModule = require('path');
+
+      const oldPath = pathModule.join(projectConfig.localPath, oldName);
+      const newPath = pathModule.join(projectConfig.localPath, newName);
+
+      // 检查旧文件是否存在
+      if (!fs.existsSync(oldPath)) {
+        console.log('[Server] ⚠️ Old file not found:', oldPath, '(skipping)');
+        return;
+      }
+
+      // 确保新文件的目录存在
+      const newDir = pathModule.dirname(newPath);
+      if (!fs.existsSync(newDir)) {
+        fs.mkdirSync(newDir, { recursive: true });
+      }
+
+      // 重命名文件
+      fs.renameSync(oldPath, newPath);
+      console.log('[Server] ✅ Renamed file:', oldName, '->', newName);
+    } catch (error) {
+      console.error('[Server] ❌ Failed to rename file:', oldName, '->', newName, error);
     }
   }
 

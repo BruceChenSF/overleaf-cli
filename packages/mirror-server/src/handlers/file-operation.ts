@@ -1,4 +1,4 @@
-import { join, extname } from 'path';
+import path, { join, extname } from 'path';
 import { ProjectConfig } from '../config/types';
 import { OverleafAPIClient } from '../api/overleaf-client';
 import { FileSystemManager } from '../filesystem/manager';
@@ -78,7 +78,19 @@ export class FileOperationHandler {
           break;
 
         case 'PUT':
-          // Document updates are handled via edit events, ignore here
+          // Handle file/folder rename
+          if (action.startsWith('doc/') || action.startsWith('file/')) {
+            // Parse rename operation from body
+            // Overleaf sends: { _id: "...", name: "new_name.tex" }
+            if (body && body.name) {
+              await this.handleFileRename(projectId, body);
+            }
+          } else if (action.startsWith('folder/')) {
+            // Handle folder rename
+            if (body && body.name) {
+              await this.handleFolderRename(projectId, body);
+            }
+          }
           break;
 
         default:
@@ -91,34 +103,49 @@ export class FileOperationHandler {
 
   /**
    * Handle file creation
+   *
+   * NOTE: Since Overleaf API doesn't work reliably, we create an empty
+   * placeholder file. The actual content will be synced via:
+   * 1. Browser-side WebSocket sync (for initial content)
+   * 2. Edit events (for subsequent changes)
    */
   async handleFileCreate(projectId: string, fileInfo: FileInfo): Promise<void> {
     const isBinary = this.isBinaryFile(fileInfo.name);
 
     // Skip binary files if not configured
     if (isBinary && !this.projectConfig.syncBinaryFiles) {
-      console.log(`[FileHandler] Skipping binary file: ${fileInfo.name}`);
+      console.log(`[FileHandler] ⏭️ Skipping binary file: ${fileInfo.name}`);
       return;
     }
 
     try {
-      let content: string | Buffer;
+      // Check if file already exists (might be synced via browser)
+      const exists = await this.fileManager.fileExists(fileInfo.path);
 
-      if (fileInfo._id) {
-        // Document type - fetch via API
-        content = await this.apiClient.getDocContent(projectId, fileInfo._id);
-      } else {
-        // File type - fetch via API
-        content = await this.apiClient.getFileContent(projectId, fileInfo.path);
+      if (exists) {
+        console.log(`[FileHandler] ✅ File already exists: ${fileInfo.path} (skipping)`);
+        return;
       }
 
-      const localPath = join(this.projectConfig.localPath, fileInfo.path);
+      // Create empty file as placeholder
+      // Content will be synced via browser WebSocket or edit events
+      const fullPath = join(this.projectConfig.localPath, fileInfo.path);
 
-      await this.fileManager.createFile(fileInfo.path, content.toString());
+      if (isBinary) {
+        // For binary files, create empty buffer using fs directly
+        await fs.ensureDir(path.dirname(fullPath));
+        await fs.writeFile(fullPath, Buffer.alloc(0));
+        console.log(`[FileHandler] ✅ Created empty binary file placeholder: ${fileInfo.path}`);
+      } else {
+        // For text files, create empty file
+        await this.fileManager.createFile(fileInfo.path, '');
+        console.log(`[FileHandler] ✅ Created empty text file placeholder: ${fileInfo.path}`);
+      }
 
-      console.log(`[FileHandler] Created: ${fileInfo.path}`);
+      // Log that we're waiting for browser sync
+      console.log(`[FileHandler] ⏳ Waiting for browser to sync actual content for: ${fileInfo.path}`);
     } catch (error) {
-      console.error(`[FileHandler] Failed to create ${fileInfo.name}:`, error);
+      console.error(`[FileHandler] ❌ Failed to create ${fileInfo.name}:`, error);
     }
   }
 
@@ -167,6 +194,44 @@ export class FileOperationHandler {
       }
     } catch (error) {
       console.error(`[FileHandler] Failed to delete folder ${folderPath}:`, error);
+    }
+  }
+
+  /**
+   * Handle file rename
+   */
+  async handleFileRename(projectId: string, renameInfo: { _id?: string; name: string; path?: string }): Promise<void> {
+    try {
+      // For rename, we need to find the current file and rename it
+      // Overleaf sends: { _id: "...", name: "new_name.tex" }
+      // But we don't have a reliable mapping from _id to path
+      // So we'll need to search for the file
+
+      // TODO: Implement proper _id to path mapping
+      // For now, we'll just log the rename operation
+      console.log(`[FileHandler] ⚠️ File rename requested:`, renameInfo);
+      console.log(`[FileHandler] ⚠️ Note: File rename requires _id to path mapping, not yet implemented`);
+
+      // Alternative approach: If the browser extension sends the old path,
+      // we can use that to rename the file
+      // This would require enhancing the intercepted request data
+
+    } catch (error) {
+      console.error(`[FileHandler] Failed to rename file:`, error);
+    }
+  }
+
+  /**
+   * Handle folder rename
+   */
+  async handleFolderRename(projectId: string, renameInfo: { _id?: string; name: string; path?: string }): Promise<void> {
+    try {
+      // Similar to file rename, we need the old path to rename
+      console.log(`[FileHandler] ⚠️ Folder rename requested:`, renameInfo);
+      console.log(`[FileHandler] ⚠️ Note: Folder rename requires _id to path mapping, not yet implemented`);
+
+    } catch (error) {
+      console.error(`[FileHandler] Failed to rename folder:`, error);
     }
   }
 

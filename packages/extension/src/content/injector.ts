@@ -82,15 +82,127 @@ async function initializeMirror(): Promise<void> {
 }
 
 /**
- * 拦截 blob 请求，提取 blob hash 映射
+ * 拦截 API 请求（文件创建、删除、重命名）
  */
 function interceptDocRequests(): void {
-  console.log('[Mirror] 🔍 Setting up blob request interception...');
+  console.log('[Mirror] 🔍 Setting up API request interception...');
 
   // 劫持 fetch
   const originalFetch = window.fetch;
   window.fetch = async function(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+
+    // 🔧 检查是否是文件操作请求
+    if (url.includes('/project/') && url.includes('/doc')) {
+      const method = init?.method || 'GET';
+
+      // 文件创建：POST /project/{id}/doc
+      if (method === 'POST' && url.match(/\/project\/[^/]+\/doc$/)) {
+        console.log('[Mirror] ➕ Detected file creation request');
+
+        try {
+          // 调用原始 fetch 并获取响应
+          const response = await originalFetch.call(this, input, init);
+
+          // 克隆响应以便读取（响应只能读取一次）
+          const clonedResponse = response.clone();
+
+          try {
+            const data = await clonedResponse.json();
+            console.log('[Mirror] 📦 File creation response:', data);
+
+            if (data.name && mirrorClient && projectId) {
+              // 发送文件创建事件到服务器
+              mirrorClient.send({
+                type: 'file_created' as const,
+                project_id: projectId,
+                file_name: data.name,
+                file_id: data._id,
+                timestamp: Date.now()
+              });
+              console.log('[Mirror] ✅ Sent file creation event:', data.name);
+            }
+          } catch (parseError) {
+            console.error('[Mirror] ❌ Failed to parse response:', parseError);
+          }
+
+          // 返回原始响应
+          return response;
+        } catch (error) {
+          console.error('[Mirror] ❌ File creation request failed:', error);
+          return originalFetch.call(this, input, init);
+        }
+      }
+
+      // 文件删除：DELETE /project/{id}/doc/{doc_id}
+      if (method === 'DELETE' && url.match(/\/project\/[^/]+\/doc\/[^/]+$/)) {
+        console.log('[Mirror] 🗑️ Detected file deletion request:', url);
+
+        // 从 URL 中提取 doc_id
+        const docIdMatch = url.match(/\/doc\/([^/]+)$/);
+        if (docIdMatch && mirrorClient && projectId) {
+          const docId = docIdMatch[1];
+
+          mirrorClient.send({
+            type: 'file_deleted' as const,
+            project_id: projectId,
+            file_id: docId,
+            timestamp: Date.now()
+          });
+          console.log('[Mirror] ✅ Sent file deletion event:', docId);
+        }
+      }
+
+      // 文件重命名：PUT /project/{id}/doc/{doc_id}
+      if (method === 'PUT' && url.match(/\/project\/[^/]+\/doc\/[^/]+$/)) {
+        console.log('[Mirror] ✏️ Detected file rename request:', url);
+
+        try {
+          // 获取请求体（包含新文件名）
+          let requestBody: any = {};
+          if (init?.body) {
+            try {
+              requestBody = JSON.parse(init.body as string);
+            } catch (e) {
+              console.error('[Mirror] ❌ Failed to parse request body');
+            }
+          }
+
+          console.log('[Mirror] 📦 Rename request body:', requestBody);
+
+          // 调用原始 fetch 并获取响应
+          const response = await originalFetch.call(this, input, init);
+
+          // 克隆响应以便读取
+          const clonedResponse = response.clone();
+
+          try {
+            const data = await clonedResponse.json();
+            console.log('[Mirror] 📦 File rename response:', data);
+
+            if (data.name && mirrorClient && projectId) {
+              // 发送文件重命名事件到服务器
+              mirrorClient.send({
+                type: 'file_renamed' as const,
+                project_id: projectId,
+                old_name: requestBody.name || 'unknown',
+                new_name: data.name,
+                file_id: data._id,
+                timestamp: Date.now()
+              });
+              console.log('[Mirror] ✅ Sent file rename event:', requestBody.name, '->', data.name);
+            }
+          } catch (parseError) {
+            console.error('[Mirror] ❌ Failed to parse response:', parseError);
+          }
+
+          return response;
+        } catch (error) {
+          console.error('[Mirror] ❌ File rename request failed:', error);
+          return originalFetch.call(this, input, init);
+        }
+      }
+    }
 
     // 🔧 检查是否是 blob 请求（文档内容获取）
     if (url.includes('/project/') && url.includes('/blob/')) {
@@ -127,7 +239,7 @@ function interceptDocRequests(): void {
     return originalFetch.call(this, input, init);
   };
 
-  console.log('[Mirror] ✅ Blob request interception set up');
+  console.log('[Mirror] ✅ API request interception set up');
 }
 
 /**
