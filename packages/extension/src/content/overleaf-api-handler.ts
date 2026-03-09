@@ -27,6 +27,30 @@ export class OverleafAPIHandler {
     private projectId: string
   ) {}
 
+  private async retryWithBackoff<T>(
+    fn: () => Promise<T>,
+    context: string,
+    maxRetries: number = 3,
+    initialDelay: number = 1000
+  ): Promise<T> {
+    for (let i = 0; i < maxRetries; i++) {
+      try {
+        return await fn();
+      } catch (error) {
+        if (i === maxRetries - 1) {
+          throw error;
+        }
+
+        const delay = initialDelay * Math.pow(2, i);
+        console.warn(`[APIHandler] ⚠️ ${context} failed (attempt ${i + 1}/${maxRetries}), retrying in ${delay}ms...`);
+
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+
+    throw new Error(`${context}: Max retries exceeded`);
+  }
+
   async handleSyncRequest(message: SyncToOverleafMessage): Promise<void> {
     try {
       console.log(`[APIHandler] ${message.operation} ${message.path}`);
@@ -72,18 +96,21 @@ export class OverleafAPIHandler {
       throw new Error('Content is required for update operation');
     }
 
-    const response = await fetch(
-      `/project/${message.project_id}/doc/${message.doc_id}`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          lines: message.content.split('\n'),
-          version: -1
-        })
-      }
+    const response = await this.retryWithBackoff(
+      async () => await fetch(
+        `/project/${message.project_id}/doc/${message.doc_id}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            lines: message.content.split('\n'),
+            version: -1
+          })
+        }
+      ),
+      `Update ${message.path}`
     );
 
     if (!response.ok) {
@@ -108,18 +135,21 @@ export class OverleafAPIHandler {
     const fileName = pathParts.pop() || message.path;
 
     // Create document
-    const response = await fetch(
-      `/project/${this.projectId}/doc`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          name: fileName,
-          parent_folder_id: 'rootFolder'
-        })
-      }
+    const response = await this.retryWithBackoff(
+      async () => await fetch(
+        `/project/${this.projectId}/doc`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            name: fileName,
+            parent_folder_id: 'rootFolder'
+          })
+        }
+      ),
+      `Create ${message.path}`
     );
 
     if (!response.ok) {
@@ -161,11 +191,14 @@ export class OverleafAPIHandler {
       throw new Error('doc_id is required for delete operation');
     }
 
-    const response = await fetch(
-      `/project/${this.projectId}/doc/${message.doc_id}`,
-      {
-        method: 'DELETE'
-      }
+    const response = await this.retryWithBackoff(
+      async () => await fetch(
+        `/project/${this.projectId}/doc/${message.doc_id}`,
+        {
+          method: 'DELETE'
+        }
+      ),
+      `Delete ${message.path}`
     );
 
     // 404 is also success (file already deleted)
