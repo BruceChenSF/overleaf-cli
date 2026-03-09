@@ -48,8 +48,14 @@ export class FileWatcher {
         const relativePath = this.extractRelativePath(path);
 
         // Check if this file is being synced by the server (marker file exists)
-        if (isFileBeingSynced(this.projectDir, relativePath)) {
+        const syncId = isFileBeingSynced(this.projectDir, relativePath);
+
+        if (syncId) {
           console.log(`[FileWatcher] 🔇 Ignoring server save (marker file exists): ${relativePath}`);
+          console.log(`[FileWatcher] 📤 Sending ACK to complete sync operation: ${syncId}`);
+
+          // Send ACK to acknowledge that FileWatcher detected and ignored this change
+          acknowledgeFileSync(syncId);
           return;
         }
 
@@ -63,9 +69,22 @@ export class FileWatcher {
       .on('change', (path) => {
         const relativePath = this.extractRelativePath(path);
 
+        console.log(`[FileWatcher] 🔍 File change detected`);
+        console.log(`[FileWatcher] 🔍 Full path: ${path}`);
+        console.log(`[FileWatcher] 🔍 Relative path: ${relativePath}`);
+        console.log(`[FileWatcher] 🔍 Checking marker file for: ${relativePath}`);
+
         // Check if this file is being synced by the server (marker file exists)
-        if (isFileBeingSynced(this.projectDir, relativePath)) {
+        // This now returns the syncId if being synced, null otherwise
+        const syncId = isFileBeingSynced(this.projectDir, relativePath);
+        console.log(`[FileWatcher] 🔍 Sync ID: ${syncId}`);
+
+        if (syncId) {
           console.log(`[FileWatcher] 🔇 Ignoring server save (marker file exists): ${relativePath}`);
+          console.log(`[FileWatcher] 📤 Sending ACK to complete sync operation: ${syncId}`);
+
+          // Send ACK to acknowledge that FileWatcher detected and ignored this change
+          acknowledgeFileSync(syncId);
           return;
         }
 
@@ -80,8 +99,14 @@ export class FileWatcher {
         const relativePath = this.extractRelativePath(path);
 
         // Check if this file is being synced by the server (marker file exists)
-        if (isFileBeingSynced(this.projectDir, relativePath)) {
+        const syncId = isFileBeingSynced(this.projectDir, relativePath);
+
+        if (syncId) {
           console.log(`[FileWatcher] 🔇 Ignoring server save (marker file exists): ${relativePath}`);
+          console.log(`[FileWatcher] 📤 Sending ACK to complete sync operation: ${syncId}`);
+
+          // Send ACK to acknowledge that FileWatcher detected and ignored this change
+          acknowledgeFileSync(syncId);
           return;
         }
 
@@ -132,10 +157,44 @@ export class FileWatcher {
 }
 
 /**
- * Map to track sync operations by their unique IDs
- * Format: Map<syncId, { projectId, filePath, markFilePath }>
+ * Sync operation states (State Machine)
  */
-const activeSyncs = new Map<string, { projectId: string; filePath: string; markFilePath: string }>();
+enum SyncState {
+  PENDING = 'PENDING',           // Marker file created, waiting to write
+  AWAITING_ACK = 'AWAITING_ACK', // File written, waiting for FileWatcher ACK
+  COMPLETED = 'COMPLETED',       // ACK received, marker file can be deleted
+  TIMEOUT = 'TIMEOUT'            // Timeout, forced cleanup
+}
+
+/**
+ * Sync operation metadata with state machine
+ */
+interface SyncOperation {
+  syncId: string;
+  projectId: string;
+  filePath: string;
+  markFilePath: string;
+  state: SyncState;
+  createdAt: number;
+  timeoutTimer?: NodeJS.Timeout;
+}
+
+/**
+ * Map to track sync operations by their unique IDs
+ * Format: Map<syncId, SyncOperation>
+ */
+const activeSyncs = new Map<string, SyncOperation>();
+
+/**
+ * Reverse lookup: filePath -> syncId (for FileWatcher to send ACK)
+ * Format: Map<filePath, syncId>
+ */
+const filePathToSyncId = new Map<string, string>();
+
+/**
+ * ACK timeout (ms) - if no ACK received within this time, force cleanup
+ */
+const ACK_TIMEOUT = 5000;
 
 /**
  * Generate a unique sync ID
@@ -147,61 +206,180 @@ function generateSyncId(): string {
 /**
  * Start a sync operation for a file
  * Creates a marker file and returns the sync ID
+ *
+ * State Machine: IDLE -> PENDING
  */
 export function startFileSync(projectId: string, projectDir: string, filePath: string): string {
   const syncId = generateSyncId();
-  const markFileName = `.${filePath}.syncing`;
+
+  // Normalize path separators to match system (e.g., / to \ on Windows)
+  const path = require('path');
+  const normalizedPath = path.join(...filePath.split('/'));
+  const markFileName = `.${normalizedPath}.syncing`;
   const markFilePath = join(projectDir, markFileName);
+
+  console.log(`[startFileSync] 🔧 Creating marker file`);
+  console.log(`[startFileSync] 🔧 Project ID: ${projectId}`);
+  console.log(`[startFileSync] 🔧 Project dir: ${projectDir}`);
+  console.log(`[startFileSync] 🔧 Original file path: ${filePath}`);
+  console.log(`[startFileSync] 🔧 Normalized file path: ${normalizedPath}`);
+  console.log(`[startFileSync] 🔧 Marker file name: ${markFileName}`);
+  console.log(`[startFileSync] 🔧 Marker file path: ${markFilePath}`);
+  console.log(`[startFileSync] 🔧 Sync ID: ${syncId}`);
 
   // Create marker file (this is a clear signal that we're saving this file)
   const fs = require('fs');
-  const path = require('path');
 
   // Ensure parent directory exists for the marker file
   const markerDir = path.dirname(markFilePath);
+  console.log(`[startFileSync] 🔧 Marker dir: ${markerDir}`);
+  console.log(`[startFileSync] 🔧 Marker dir exists: ${fs.existsSync(markerDir)}`);
+
   if (!fs.existsSync(markerDir)) {
+    console.log(`[startFileSync] 🔧 Creating marker dir: ${markerDir}`);
     fs.mkdirSync(markerDir, { recursive: true });
   }
 
+  console.log(`[startFileSync] 🔧 Writing marker file: ${markFilePath}`);
   fs.writeFileSync(markFilePath, syncId, 'utf8');
+  console.log(`[startFileSync] ✅ Marker file created successfully`);
 
-  // Track this sync operation
-  activeSyncs.set(syncId, { projectId, filePath, markFilePath });
+  // Track this sync operation with state machine
+  const syncOperation: SyncOperation = {
+    syncId,
+    projectId,
+    filePath: normalizedPath,
+    markFilePath,
+    state: SyncState.PENDING,
+    createdAt: Date.now()
+  };
+
+  activeSyncs.set(syncId, syncOperation);
+  filePathToSyncId.set(normalizedPath, syncId);
+
+  console.log(`[startFileSync] ✅ State: ${syncOperation.state}`);
 
   return syncId;
 }
 
 /**
- * End a sync operation for a file
- * Removes the marker file
+ * End a sync operation for a file (file has been written)
+ *
+ * State Machine: PENDING -> AWAITING_ACK
+ * Does NOT delete marker file immediately - waits for FileWatcher ACK
  */
 export function endFileSync(syncId: string): void {
+  console.log(`[endFileSync] 🔧 File written, waiting for ACK`);
+  console.log(`[endFileSync] 🔧 Sync ID: ${syncId}`);
+
   const sync = activeSyncs.get(syncId);
   if (!sync) {
-    console.warn(`[FileWatcher] ⚠️ Sync ID not found: ${syncId}`);
+    console.warn(`[endFileSync] ⚠️ Sync ID not found: ${syncId}`);
     return;
   }
 
-  // Remove marker file
+  // Transition state: PENDING -> AWAITING_ACK
+  sync.state = SyncState.AWAITING_ACK;
+  console.log(`[endFileSync] ✅ State transition: ${SyncState.PENDING} -> ${SyncState.AWAITING_ACK}`);
+
+  // Set timeout for ACK (prevent deadlock if FileWatcher never detects change)
+  sync.timeoutTimer = setTimeout(() => {
+    console.log(`[endFileSync] ⏱️ ACK timeout for ${syncId}, forcing cleanup`);
+    acknowledgeFileSync(syncId);
+  }, ACK_TIMEOUT);
+
+  console.log(`[endFileSync] ⏱️ ACK timer started (${ACK_TIMEOUT}ms timeout)`);
+}
+
+/**
+ * ACK callback from FileWatcher (acknowledges that file change was detected and ignored)
+ *
+ * State Machine: AWAITING_ACK -> COMPLETED
+ * Deletes marker file and cleans up
+ */
+export function acknowledgeFileSync(syncId: string): void {
+  console.log(`[acknowledgeFileSync] ✅ ACK received for sync: ${syncId}`);
+
+  const sync = activeSyncs.get(syncId);
+  if (!sync) {
+    console.warn(`[acknowledgeFileSync] ⚠️ Sync ID not found: ${syncId}`);
+    return;
+  }
+
+  // Clear timeout if exists
+  if (sync.timeoutTimer) {
+    clearTimeout(sync.timeoutTimer);
+    console.log(`[acknowledgeFileSync] ⏱️ ACK timer cleared`);
+  }
+
+  // Transition state: AWAITING_ACK -> COMPLETED
+  const oldState = sync.state;
+  sync.state = SyncState.COMPLETED;
+  console.log(`[acknowledgeFileSync] ✅ State transition: ${oldState} -> ${SyncState.COMPLETED}`);
+
+  // Delete marker file (safe to delete now, FileWatcher has processed it)
   if (existsSync(sync.markFilePath)) {
     try {
+      console.log(`[acknowledgeFileSync] 🔧 Deleting marker file: ${sync.markFilePath}`);
       unlinkSync(sync.markFilePath);
+      console.log(`[acknowledgeFileSync] ✅ Marker file deleted successfully`);
     } catch (error) {
-      console.error(`[FileWatcher] ❌ Failed to delete marker file: ${sync.markFilePath}`, error);
+      console.error(`[acknowledgeFileSync] ❌ Failed to delete marker file: ${sync.markFilePath}`, error);
     }
   }
 
-  // Remove from active syncs
+  // Cleanup maps
   activeSyncs.delete(syncId);
+  filePathToSyncId.delete(sync.filePath);
+
+  console.log(`[acknowledgeFileSync] ✅ Sync operation completed and cleaned up`);
 }
 
 /**
  * Check if a file is currently being synced (by checking for marker file)
+ *
+ * Returns the syncId if being synced, null otherwise
+ * This allows FileWatcher to send ACK back
  */
-export function isFileBeingSynced(projectDir: string, filePath: string): boolean {
+export function isFileBeingSynced(projectDir: string, filePath: string): string | null {
   const markFileName = `.${filePath}.syncing`;
   const markFilePath = join(projectDir, markFileName);
-  return existsSync(markFilePath);
+
+  console.log(`[isFileBeingSynced] 🔍 Checking for marker file`);
+  console.log(`[isFileBeingSynced] 🔍 Project dir: ${projectDir}`);
+  console.log(`[isFileBeingSynced] 🔍 File path: ${filePath}`);
+  console.log(`[isFileBeingSynced] 🔍 Marker file name: ${markFileName}`);
+  console.log(`[isFileBeingSynced] 🔍 Marker file path: ${markFilePath}`);
+
+  const exists = existsSync(markFilePath);
+  console.log(`[isFileBeingSynced] 🔍 Marker file exists: ${exists}`);
+
+  if (!exists) {
+    return null;
+  }
+
+  // Read syncId from marker file
+  try {
+    const fs = require('fs');
+    const syncId = fs.readFileSync(markFilePath, 'utf8');
+    console.log(`[isFileBeingSynced] ✅ Found syncId: ${syncId}`);
+
+    // Verify this sync is still active and in AWAITING_ACK state
+    const sync = activeSyncs.get(syncId);
+    if (sync && sync.state === SyncState.AWAITING_ACK) {
+      console.log(`[isFileBeingSynced] ✅ Sync is in AWAITING_ACK state, will send ACK`);
+      return syncId;
+    } else if (sync) {
+      console.log(`[isFileBeingSynced] ⚠️ Sync found but in unexpected state: ${sync.state}`);
+      return syncId; // Still return syncId to let ACK handle it
+    } else {
+      console.log(`[isFileBeingSynced] ⚠️ Marker file exists but syncId not found in activeSyncs`);
+      return syncId; // Return syncId anyway, cleanup will handle stale markers
+    }
+  } catch (error) {
+    console.error(`[isFileBeingSynced] ❌ Error reading marker file:`, error);
+    return null;
+  }
 }
 
 export type { FileChangeEvent, ChangeEventHandler };
