@@ -47,6 +47,10 @@ export class OverleafSyncManager {
     this.wsClient.on('message', (data: string) => {
       this.handleMessage(data);
     });
+
+    this.wsClient.on('error', (error) => {
+      console.error('[OverleafSyncManager] WebSocket error:', error);
+    });
   }
 
   private handleMessage(data: string): void {
@@ -74,15 +78,20 @@ export class OverleafSyncManager {
   }
 
   async handleFileChange(event: FileChangeEvent): Promise<void> {
-    // Debounce handling
+    // Clear existing timer
     if (this.debounceTimer.has(event.path)) {
-      clearTimeout(this.debounceTimer.get(event.path));
+      clearTimeout(this.debounceTimer.get(event.path)!);
     }
 
     const timer = setTimeout(async () => {
-      await this.syncToOverleaf(event);
-      this.debounceTimer.delete(event.path);
-    }, 500); // 500ms debounce
+      try {
+        await this.syncToOverleaf(event);
+      } catch (error) {
+        console.error(`[OverleafSyncManager] ❌ Error in syncToOverleaf:`, error);
+      } finally {
+        this.debounceTimer.delete(event.path);
+      }
+    }, 500);
 
     this.debounceTimer.set(event.path, timer);
   }
@@ -91,17 +100,28 @@ export class OverleafSyncManager {
     try {
       console.log(`[OverleafSyncManager] Syncing to Overleaf: ${event.type} ${event.path}`);
 
-      // Read file content
-      const content = await readFile(
-        join(this.projectPath, event.path),
-        'utf-8'
-      );
+      let content: string | undefined;
+
+      // Only read content for create and update operations
+      if (event.type !== 'delete') {
+        content = await readFile(
+          join(this.projectPath, event.path),
+          'utf-8'
+        );
+      }
 
       // Find docId
       const docId = this.pathToDocId.get(event.path);
 
       // Determine operation type
-      const operation = docId ? 'update' : 'create';
+      let operation: 'update' | 'create' | 'delete';
+      if (event.type === 'delete') {
+        operation = 'delete';
+      } else if (docId) {
+        operation = 'update';
+      } else {
+        operation = 'create';
+      }
 
       // Send message to extension
       const message: SyncToOverleafMessage = {
@@ -154,8 +174,10 @@ export class OverleafSyncManager {
       this.wsClient = null;
     }
 
-    // Clear debounce timers
-    this.debounceTimer.forEach(timer => clearTimeout(timer));
+    // Clear debounce timers with null check
+    this.debounceTimer.forEach((timer) => {
+      if (timer) clearTimeout(timer);
+    });
     this.debounceTimer.clear();
   }
 }
