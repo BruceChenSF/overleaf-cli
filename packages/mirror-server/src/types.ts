@@ -229,3 +229,25 @@ export interface VersionInfo {
   buildDate: string;
   gitCommit?: string;
 }
+
+// Local to Overleaf sync messages
+export interface SyncToOverleafMessage {
+  type: 'sync_to_overleaf';
+  project_id: string;
+  operation: 'update' | 'create' | 'delete';
+  path: string;
+  content?: string;
+  doc_id?: string;
+  timestamp: number;
+}
+
+export interface SyncToOverleafResponse {
+  type: 'sync_to_overleaf_response';
+  project_id: string;
+  operation: 'update' | 'create' | 'delete';
+  path: string;
+  success: boolean;
+  error?: string;
+  doc_id?: string;
+  timestamp: number;
+}
