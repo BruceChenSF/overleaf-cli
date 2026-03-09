@@ -44,13 +44,19 @@ export class FileWatcher {
 
     this.watcher
       .on('add', (path) => {
+        const relativePath = this.extractRelativePath(path);
+
         // Ignore events if syncing from Overleaf (set by server code)
         if (isSyncingFromOverleaf(this.projectId)) {
-          console.log(`[FileWatcher] 🔇 Ignoring Overleaf → local save: ${this.extractRelativePath(path)}`);
+          console.log(`[FileWatcher] 🔇 Ignoring Overleaf → local save: ${relativePath}`);
           return;
         }
 
-        const relativePath = this.extractRelativePath(path);
+        // Also ignore if this file was recently synced (accounts for chokidar delay)
+        if (wasFileRecentlySynced(this.projectId, relativePath)) {
+          return;
+        }
+
         console.log(`[FileWatcher] ➕ File added: ${relativePath}`);
         console.log(`[FileWatcher] 🔧 Full path: ${path}`);
         this.onChangeCallback?.({
@@ -59,13 +65,19 @@ export class FileWatcher {
         });
       })
       .on('change', (path) => {
+        const relativePath = this.extractRelativePath(path);
+
         // Ignore events if syncing from Overleaf (set by server code)
         if (isSyncingFromOverleaf(this.projectId)) {
-          console.log(`[FileWatcher] 🔇 Ignoring Overleaf → local save: ${this.extractRelativePath(path)}`);
+          console.log(`[FileWatcher] 🔇 Ignoring Overleaf → local save: ${relativePath}`);
           return;
         }
 
-        const relativePath = this.extractRelativePath(path);
+        // Also ignore if this file was recently synced (accounts for chokidar delay)
+        if (wasFileRecentlySynced(this.projectId, relativePath)) {
+          return;
+        }
+
         console.log(`[FileWatcher] ✏️ File modified: ${relativePath}`);
         console.log(`[FileWatcher] 🔧 Full path: ${path}`);
         this.onChangeCallback?.({
@@ -74,13 +86,19 @@ export class FileWatcher {
         });
       })
       .on('unlink', (path) => {
+        const relativePath = this.extractRelativePath(path);
+
         // Ignore events if syncing from Overleaf (set by server code)
         if (isSyncingFromOverleaf(this.projectId)) {
-          console.log(`[FileWatcher] 🔇 Ignoring Overleaf → local save: ${this.extractRelativePath(path)}`);
+          console.log(`[FileWatcher] 🔇 Ignoring Overleaf → local save: ${relativePath}`);
           return;
         }
 
-        const relativePath = this.extractRelativePath(path);
+        // Also ignore if this file was recently synced (accounts for chokidar delay)
+        if (wasFileRecentlySynced(this.projectId, relativePath)) {
+          return;
+        }
+
         console.log(`[FileWatcher] 🗑️ File deleted: ${relativePath}`);
         console.log(`[FileWatcher] 🔧 Full path: ${path}`);
         this.onChangeCallback?.({
@@ -134,10 +152,63 @@ export class FileWatcher {
 const syncingFromOverleaf = new Map<string, boolean>();
 
 /**
+ * Map to track files that were just synced from Overleaf (with timestamp)
+ * Format: Map<projectId, Map<filePath, timestamp>>
+ */
+const recentlySyncedFiles = new Map<string, Map<string, number>>();
+
+/**
+ * Time window (ms) to ignore files after they were synced from Overleaf
+ * This accounts for chokidar's delay in detecting file changes
+ */
+const IGNORE_RECENTLY_SYNCED_WINDOW = 1000; // 1 second
+
+/**
  * Check if a project is currently syncing from Overleaf
  */
 export function isSyncingFromOverleaf(projectId: string): boolean {
   return syncingFromOverleaf.get(projectId) || false;
+}
+
+/**
+ * Mark that a file was just synced from Overleaf
+ */
+export function markFileSynced(projectId: string, filePath: string): void {
+  if (!recentlySyncedFiles.has(projectId)) {
+    recentlySyncedFiles.set(projectId, new Map());
+  }
+  const projectFiles = recentlySyncedFiles.get(projectId)!;
+  projectFiles.set(filePath, Date.now());
+
+  // Clean up old entries (older than 2x the ignore window)
+  const now = Date.now();
+  const cutoff = now - (IGNORE_RECENTLY_SYNCED_WINDOW * 2);
+  for (const [path, timestamp] of projectFiles.entries()) {
+    if (timestamp < cutoff) {
+      projectFiles.delete(path);
+    }
+  }
+}
+
+/**
+ * Check if a file was recently synced from Overleaf
+ */
+export function wasFileRecentlySynced(projectId: string, filePath: string): boolean {
+  const projectFiles = recentlySyncedFiles.get(projectId);
+  if (!projectFiles) return false;
+
+  const timestamp = projectFiles.get(filePath);
+  if (!timestamp) return false;
+
+  const elapsed = Date.now() - timestamp;
+  if (elapsed < IGNORE_RECENTLY_SYNCED_WINDOW) {
+    console.log(`[FileWatcher] 🔇 Ignoring recently synced file: ${filePath} (${elapsed}ms ago)`);
+    return true;
+  }
+
+  // Old entry, remove it
+  projectFiles.delete(filePath);
+  return false;
 }
 
 /**

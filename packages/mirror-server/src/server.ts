@@ -3,7 +3,7 @@ import { Server as HttpServer } from 'http';
 import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { ClientConnection } from './client-connection';
 import { FileWatcher } from './filesystem/watcher';
-import { startSyncingFromOverleaf, stopSyncingFromOverleaf } from './filesystem/watcher';
+import { startSyncingFromOverleaf, stopSyncingFromOverleaf, markFileSynced } from './filesystem/watcher';
 import { OverleafSyncManager } from './sync/overleaf-sync-manager';
 import { handleEditMonitor } from './handlers/edit-monitor';
 import { FileOperationHandler } from './handlers/file-operation';
@@ -433,6 +433,9 @@ export class MirrorServer {
         console.log('[Server] ✅ Saved text file:', path, `(${content.length} chars) to`, filePath);
       }
 
+      // 🔧 Mark this file as recently synced (to handle chokidar delay)
+      markFileSynced(projectId, path);
+
       // 🔧 Clear the flag after saving
       stopSyncingFromOverleaf(projectId);
     } catch (error) {
@@ -660,6 +663,9 @@ export class MirrorServer {
             console.log('[Server] ✅ Saved:', info.path, `(${content.length} chars, ${lines.length} lines)`);
             syncedCount++;
 
+            // 🔧 Mark this file as recently synced (to handle chokidar delay)
+            markFileSynced(projectId, info.path);
+
             // Add to mapping
             docIdToPath.set(id, { path: info.path, type: 'doc' });
           } else if (info.type === 'file') {
@@ -681,6 +687,9 @@ export class MirrorServer {
             fs.writeFileSync(filePath, buffer);
             console.log('[Server] ✅ Saved:', info.path, `(${buffer.length} bytes, binary)`);
             syncedCount++;
+
+            // 🔧 Mark this file as recently synced (to handle chokidar delay)
+            markFileSynced(projectId, info.path);
 
             // Add to mapping
             docIdToPath.set(id, { path: info.path, type: 'file' });
