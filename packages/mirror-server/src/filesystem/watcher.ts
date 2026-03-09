@@ -17,6 +17,8 @@ export class FileWatcher {
   private watcher: chokidar.FSWatcher | null = null;
   private onChangeCallback?: ChangeEventHandler;
   private projectDir: string;
+  private startTime: number = 0;
+  private silentPeriod: number = 3000; // 3 seconds silent period after start
 
   constructor(
     private projectId: string,
@@ -33,6 +35,10 @@ export class FileWatcher {
     console.log(`[FileWatcher] 🔧 Project ID: ${this.projectId}`);
     console.log(`[FileWatcher] 🔧 Watching directory: ${this.projectDir}`);
     console.log(`[FileWatcher] 🔧 Callback registered: ${this.onChangeCallback ? 'Yes' : 'No'}`);
+    console.log(`[FileWatcher] 🔧 Silent period: ${this.silentPeriod}ms`);
+
+    // Record start time for silent period
+    this.startTime = Date.now();
 
     this.watcher = chokidar.watch(this.projectDir, {
       ignored: /(^|[\/\\])\../, // ignore dotfiles
@@ -44,6 +50,12 @@ export class FileWatcher {
 
     this.watcher
       .on('add', (path) => {
+        // Ignore events during silent period
+        if (this.isInSilentPeriod()) {
+          console.log(`[FileWatcher] 🔇 Silencing add event during silent period: ${this.extractRelativePath(path)}`);
+          return;
+        }
+
         const relativePath = this.extractRelativePath(path);
         console.log(`[FileWatcher] ➕ File added: ${relativePath}`);
         console.log(`[FileWatcher] 🔧 Full path: ${path}`);
@@ -53,6 +65,12 @@ export class FileWatcher {
         });
       })
       .on('change', (path) => {
+        // Ignore events during silent period
+        if (this.isInSilentPeriod()) {
+          console.log(`[FileWatcher] 🔇 Silencing change event during silent period: ${this.extractRelativePath(path)}`);
+          return;
+        }
+
         const relativePath = this.extractRelativePath(path);
         console.log(`[FileWatcher] ✏️ File modified: ${relativePath}`);
         console.log(`[FileWatcher] 🔧 Full path: ${path}`);
@@ -62,6 +80,12 @@ export class FileWatcher {
         });
       })
       .on('unlink', (path) => {
+        // Ignore events during silent period
+        if (this.isInSilentPeriod()) {
+          console.log(`[FileWatcher] 🔇 Silencing unlink event during silent period: ${this.extractRelativePath(path)}`);
+          return;
+        }
+
         const relativePath = this.extractRelativePath(path);
         console.log(`[FileWatcher] 🗑️ File deleted: ${relativePath}`);
         console.log(`[FileWatcher] 🔧 Full path: ${path}`);
@@ -97,6 +121,21 @@ export class FileWatcher {
   onChange(callback: ChangeEventHandler): void {
     this.onChangeCallback = callback;
     console.log('[FileWatcher] Change callback registered');
+  }
+
+  /**
+   * Check if currently in silent period (just after start)
+   * This prevents triggering sync for files saved during initial sync
+   */
+  private isInSilentPeriod(): boolean {
+    const elapsed = Date.now() - this.startTime;
+    const inSilentPeriod = elapsed < this.silentPeriod;
+
+    if (inSilentPeriod) {
+      console.log(`[FileWatcher] 🔇 In silent period: ${elapsed}ms < ${this.silentPeriod}ms`);
+    }
+
+    return inSilentPeriod;
   }
 
   /**

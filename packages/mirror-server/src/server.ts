@@ -546,6 +546,13 @@ export class MirrorServer {
    * @private
    */
   private async handleInitialSync(projectId: string): Promise<void> {
+    // 获取项目配置（会自动创建默认配置）- 必须在 try 块外
+    const projectConfig = this.configStore.getProjectConfig(projectId);
+    console.log('[Server] 📂 Local path:', projectConfig.localPath);
+
+    // Build docIdToPath mapping - 必须在 try 块外
+    const docIdToPath = new Map<string, any>();
+
     try {
       console.log('[Server] 🔄 Handling initial sync for project:', projectId);
 
@@ -557,10 +564,6 @@ export class MirrorServer {
       }
 
       console.log('[Server] ✅ Found', cookies.size, 'cookies for sync');
-
-      // 获取项目配置（会自动创建默认配置）
-      const projectConfig = this.configStore.getProjectConfig(projectId);
-      console.log('[Server] 📂 Local path:', projectConfig.localPath);
 
       // 🔧 使用 WebSocket 客户端同步所有文件
       const overleafSession2 = cookies.get('overleaf_session2');
@@ -609,9 +612,6 @@ export class MirrorServer {
       // 获取所有文件 ID
       const allIds = wsClient.getAllDocIds();
       console.log('[Server] ✅ Found', allIds.length, 'files in project');
-
-      // Build docIdToPath mapping
-      const docIdToPath = new Map<string, any>();
 
       // 同步所有文件
       let syncedCount = 0;
@@ -681,21 +681,21 @@ export class MirrorServer {
       wsClient.disconnect();
 
       console.log('[Server] ✅ Initial sync complete:', syncedCount, 'files downloaded to', projectConfig.localPath);
-
-      // Start file sync if enabled
-      console.log(`[Server] 🔍 Checking file sync config...`);
-      console.log(`[Server] 🔍 enableFileSync value:`, projectConfig.enableFileSync);
-      console.log(`[Server] 🔍 Project config:`, JSON.stringify(projectConfig, null, 2));
-
-      if (projectConfig.enableFileSync) {
-        console.log('[Server] 🔄 File sync enabled, starting continuous sync...');
-        this.startFileSync(projectId, docIdToPath);
-      } else {
-        console.log('[Server] ℹ️ File sync not enabled (set enableFileSync: true in config to enable)');
-      }
-
     } catch (error) {
       console.error('[Server] ❌ Initial sync failed:', error);
+      console.error('[Server] ⚠️ Will still attempt to start file sync if enabled...');
+    }
+
+    // 🔧 Start file sync if enabled (do this outside try-catch so it runs even if initial sync fails)
+    console.log(`[Server] 🔍 Checking file sync config...`);
+    console.log(`[Server] 🔍 enableFileSync value:`, projectConfig.enableFileSync);
+    console.log(`[Server] 🔍 Project config:`, JSON.stringify(projectConfig, null, 2));
+
+    if (projectConfig.enableFileSync) {
+      console.log('[Server] 🔄 File sync enabled, starting continuous sync...');
+      this.startFileSync(projectId, docIdToPath);
+    } else {
+      console.log('[Server] ℹ️ File sync not enabled (set enableFileSync: true in config to enable)');
     }
   }
 
