@@ -155,6 +155,14 @@ export function startFileSync(projectId: string, projectDir: string, filePath: s
 
   // Create marker file (this is a clear signal that we're saving this file)
   const fs = require('fs');
+  const path = require('path');
+
+  // Ensure parent directory exists for the marker file
+  const markerDir = path.dirname(markFilePath);
+  if (!fs.existsSync(markerDir)) {
+    fs.mkdirSync(markerDir, { recursive: true });
+  }
+
   fs.writeFileSync(markFilePath, syncId, 'utf8');
 
   // Track this sync operation
