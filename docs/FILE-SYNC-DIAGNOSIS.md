@@ -300,6 +300,43 @@ ls -la ~/overleaf-mirror/your-project-id
 
 ---
 
+## 🔧 已修复的问题
+
+### 问题: 只看到 mirror 消息，没有 sync 消息
+
+**症状**:
+- 服务器日志只显示 `[Server] Handling message type: mirror`
+- 从未看到 `[Server] 📨 Received sync command: initial_sync`
+- 配置检查日志（`🔍 Checking file sync config`）从未出现
+
+**根本原因**:
+扩展的 `requestInitialSync()` 函数在浏览器中执行同步，并发送 `file_sync` 消息给服务器，但**从未发送服务器期望的 `sync` 消息**。服务器需要这个 `sync` 消息来触发 `handleInitialSync()` 方法，该方法会检查 `enableFileSync` 配置并启动文件监控。
+
+**修复** (commit 12bc32f):
+在 `packages/extension/src/content/injector.ts` 中，在 `sendCookiesToServer()` 之后添加了发送 `sync` 消息的代码：
+
+```typescript
+// 🔧 新增：告诉服务器开始初始同步（这会触发 enableFileSync 检查）
+console.log('[Mirror] 🔄 Telling server to start initial sync...');
+mirrorClient.send({
+  type: 'sync' as const,
+  project_id: projectId,
+  operation: 'initial_sync',
+  timestamp: Date.now()
+});
+console.log('[Mirror] ✅ Initial sync message sent to server');
+```
+
+**验证修复**:
+重新编译扩展后，您应该看到：
+1. 浏览器控制台: `[Mirror] 🔄 Telling server to start initial sync...`
+2. 浏览器控制台: `[Mirror] ✅ Initial sync message sent to server`
+3. 服务器日志: `[Server] 📨 Received sync command: initial_sync`
+4. 服务器日志: `[Server] 🔍 Checking file sync config...`
+5. 如果 `enableFileSync: true`，则文件监控启动
+
+---
+
 ## 🎯 下一步
 
 根据诊断结果：
@@ -308,6 +345,7 @@ ls -la ~/overleaf-mirror/your-project-id
 2. **如果目录路径问题** → 更新 localPath
 3. **如果回调未注册** → 检查 startFileSync 实现
 4. **如果 chokidar 问题** → 检查文件系统权限
+5. **如果只有 mirror 消息** → 确保使用最新版本扩展（commit 12bc32f）
 
 完成诊断后，请报告：
 - 您在哪个步骤遇到问题？
@@ -318,6 +356,6 @@ ls -la ~/overleaf-mirror/your-project-id
 
 ---
 
-**诊断指南版本**: 1.0
+**诊断指南版本**: 1.1
 **最后更新**: 2026-03-09
 **作者**: Claude Code Assistant
