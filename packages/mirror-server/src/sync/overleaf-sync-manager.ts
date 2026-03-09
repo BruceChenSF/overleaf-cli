@@ -180,4 +180,9 @@ export class OverleafSyncManager {
     });
     this.debounceTimer.clear();
   }
+
+  updateMapping(path: string, docId: string): void {
+    this.pathToDocId.set(path, docId);
+    console.log(`[OverleafSyncManager] ✅ Updated mapping: ${path} → ${docId}`);
+  }
 }

@@ -3,6 +3,7 @@ import { Server as HttpServer } from 'http';
 import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { ClientConnection } from './client-connection';
 import { FileWatcher } from './filesystem/watcher';
+import { OverleafSyncManager } from './sync/overleaf-sync-manager';
 import { handleEditMonitor } from './handlers/edit-monitor';
 import { FileOperationHandler } from './handlers/file-operation';
 import { ProjectConfigStore } from './config';
@@ -11,6 +12,7 @@ import { OverleafWebSocketClient } from './overleaf-websocket';
 import { TextFileSyncManager } from './sync';
 import type { WSMessage, SyncCommandMessage } from './types';
 import type { EditEventMessage } from '@overleaf-cc/shared';
+import type { FileChangeEvent } from './filesystem/watcher';
 
 const PORT = 3456;
 
@@ -23,6 +25,7 @@ export class MirrorServer {
   // Add these:
   private configStore: ProjectConfigStore;
   private textSyncManagers: Map<string, TextFileSyncManager> = new Map();
+  private syncManagers: Map<string, OverleafSyncManager> = new Map();
   private projectCookies: Map<string, Map<string, string>> = new Map();
   private projectCsrfTokens: Map<string, string> = new Map(); // Store CSRF tokens
   private fileHandlers: Map<string, FileOperationHandler> = new Map();
@@ -273,6 +276,9 @@ export class MirrorServer {
         const fileRenamedMsg = message as any;
         console.log('[Server] ✏️ Received file rename event:', fileRenamedMsg.old_name, '->', fileRenamedMsg.new_name);
         this.handleFileRenamed(fileRenamedMsg.project_id, fileRenamedMsg.old_name, fileRenamedMsg.new_name);
+        break;
+      case 'sync_to_overleaf_response':
+        this.handleSyncResponse(message);
         break;
       default:
         console.warn('Unknown message type:', message);
@@ -594,6 +600,9 @@ export class MirrorServer {
       const allIds = wsClient.getAllDocIds();
       console.log('[Server] ✅ Found', allIds.length, 'files in project');
 
+      // Build docIdToPath mapping
+      const docIdToPath = new Map<string, any>();
+
       // 同步所有文件
       let syncedCount = 0;
       for (const id of allIds) {
@@ -627,6 +636,9 @@ export class MirrorServer {
             fs.writeFileSync(filePath, content, 'utf8');
             console.log('[Server] ✅ Saved:', info.path, `(${content.length} chars, ${lines.length} lines)`);
             syncedCount++;
+
+            // Add to mapping
+            docIdToPath.set(id, { path: info.path, type: 'doc' });
           } else if (info.type === 'file') {
             // 二进制文件 - 使用 downloadFile 获取内容
             const buffer = await wsClient.downloadFile(id);
@@ -646,6 +658,9 @@ export class MirrorServer {
             fs.writeFileSync(filePath, buffer);
             console.log('[Server] ✅ Saved:', info.path, `(${buffer.length} bytes, binary)`);
             syncedCount++;
+
+            // Add to mapping
+            docIdToPath.set(id, { path: info.path, type: 'file' });
           }
         } catch (error) {
           console.error('[Server] ❌ Failed to sync', id, ':', error);
@@ -657,8 +672,109 @@ export class MirrorServer {
 
       console.log('[Server] ✅ Initial sync complete:', syncedCount, 'files downloaded to', projectConfig.localPath);
 
+      // Start file sync if enabled
+      if (projectConfig.enableFileSync) {
+        console.log('[Server] 🔄 File sync enabled, starting continuous sync...');
+        this.startFileSync(projectId, docIdToPath);
+      } else {
+        console.log('[Server] ℹ️ File sync not enabled (set enableFileSync: true in config to enable)');
+      }
+
     } catch (error) {
       console.error('[Server] ❌ Initial sync failed:', error);
+    }
+  }
+
+  /**
+   * Start file sync for a project
+   *
+   * @param projectId - Project ID
+   * @param docIdToPath - Map of doc IDs to file info
+   * @private
+   */
+  private startFileSync(projectId: string, docIdToPath: Map<string, any>): void {
+    console.log(`[Server] Starting file sync for project: ${projectId}`);
+
+    // Get project config
+    const config = this.configStore.getProjectConfig(projectId);
+    if (!config || !config.localPath) {
+      console.error(`[Server] ❌ No local path found for project: ${projectId}`);
+      return;
+    }
+
+    // Create FileWatcher
+    const fileWatcher = new FileWatcher(projectId, config.localPath);
+
+    // Create SyncManager
+    const syncManager = new OverleafSyncManager(projectId, this.config.port);
+
+    // Initialize mappings
+    syncManager.initializeMappings(docIdToPath);
+
+    // Set up callback
+    fileWatcher.onChange((event: FileChangeEvent) => {
+      syncManager.handleFileChange(event);
+    });
+
+    // Start watching
+    fileWatcher.start().catch((error) => {
+      console.error(`[Server] ❌ Failed to start file watcher:`, error);
+    });
+
+    // Store instances
+    this.fileWatchers.set(projectId, fileWatcher);
+    this.syncManagers.set(projectId, syncManager);
+
+    console.log(`[Server] ✅ File sync started for project: ${projectId}`);
+  }
+
+  /**
+   * Stop file sync for a project
+   *
+   * @param projectId - Project ID
+   * @private
+   */
+  private stopFileSync(projectId: string): void {
+    const fileWatcher = this.fileWatchers.get(projectId);
+    const syncManager = this.syncManagers.get(projectId);
+
+    if (fileWatcher) {
+      fileWatcher.stop();
+      this.fileWatchers.delete(projectId);
+    }
+
+    if (syncManager) {
+      syncManager.stop();
+      this.syncManagers.delete(projectId);
+    }
+
+    console.log(`[Server] Stopped file sync for project: ${projectId}`);
+  }
+
+  /**
+   * Handle sync response from extension
+   *
+   * @param message - Sync response message
+   * @private
+   */
+  private handleSyncResponse(message: any): void {
+    const { project_id, success, operation, path, doc_id, error } = message;
+
+    const syncManager = this.syncManagers.get(project_id);
+    if (!syncManager) {
+      console.warn(`[Server] ⚠️ No sync manager for project: ${project_id}`);
+      return;
+    }
+
+    if (success) {
+      console.log(`[Server] ✅ Sync to Overleaf successful: ${operation} ${path}`);
+
+      // Update mapping for create operations
+      if (operation === 'create' && doc_id) {
+        syncManager.updateMapping(path, doc_id);
+      }
+    } else {
+      console.error(`[Server] ❌ Sync to Overleaf failed: ${operation} ${path} - ${error}`);
     }
   }
 
@@ -669,6 +785,11 @@ export class MirrorServer {
   }
 
   close(): void {
+    // Stop all file sync
+    for (const projectId of this.syncManagers.keys()) {
+      this.stopFileSync(projectId);
+    }
+
     // Stop all file watchers
     this.fileWatchers.forEach((watcher) => {
       watcher.stop();

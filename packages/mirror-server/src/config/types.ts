@@ -14,6 +14,8 @@ export interface ProjectConfig {
   lastSyncAt: number;
   /** Whether to sync binary files (.pdf, .png, etc.) */
   syncBinaryFiles: boolean;
+  /** Whether to enable file sync (default: false) */
+  enableFileSync?: boolean;
 }
 
 /**
