@@ -66,6 +66,16 @@ async function initializeMirror(): Promise<void> {
     // 🔧 新增：立即获取并发送 cookies
     await sendCookiesToServer();
 
+    // 🔧 新增：告诉服务器开始初始同步（这会触发 enableFileSync 检查）
+    console.log('[Mirror] 🔄 Telling server to start initial sync...');
+    mirrorClient.send({
+      type: 'sync' as const,
+      project_id: projectId,
+      operation: 'initial_sync',
+      timestamp: Date.now()
+    });
+    console.log('[Mirror] ✅ Initial sync message sent to server');
+
     // 🔧 新增：请求初始同步并监听文件变化
     await requestInitialSync();
 

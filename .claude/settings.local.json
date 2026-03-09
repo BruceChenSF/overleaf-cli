@@ -41,7 +41,12 @@
       "Bash(if not exist \"C:\\\\Home\\\\CodeProjects\\\\overleaf-cc\\\\docs\\\\plans\" mkdir:*)",
       "Bash(npm run lint:*)",
       "Bash(npm run)",
-      "Bash(npm uninstall:*)"
+      "Bash(npm uninstall:*)",
+      "Bash(git rm:*)",
+      "Bash(npm run type-check:*)",
+      "Bash(git stash:*)",
+      "Bash(timeout:*)",
+      "Bash(exit:*)"
     ]
   },
   "enabledPlugins": {
