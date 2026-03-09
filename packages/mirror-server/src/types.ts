@@ -28,6 +28,7 @@ export interface FileDeletedMessage {
   type: 'file_deleted';
   project_id: string;
   file_id: string;
+  path: string;
   timestamp: number;
 }
 

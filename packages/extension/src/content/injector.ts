@@ -4,6 +4,7 @@ import { OverleafWebSocketClient } from './overleaf-sync';
 
 let mirrorClient: MirrorClient | null = null;
 let editMonitor: EditMonitor | null = null;
+let overleafWsClient: OverleafWebSocketClient | null = null;
 
 // Extract project ID immediately (available at document_start)
 function extractProjectId(): string | null {
@@ -63,10 +64,7 @@ async function initializeMirror(): Promise<void> {
     // 🔧 新增：立即获取并发送 cookies
     await sendCookiesToServer();
 
-    // 🔧 新增：拦截文档获取请求
-    interceptDocRequests();
-
-    // 🔧 新增：请求初始同步（等待完成）
+    // 🔧 新增：请求初始同步并监听文件变化
     await requestInitialSync();
 
     // 启动编辑监测（仅在初始同步完成后）
@@ -78,194 +76,6 @@ async function initializeMirror(): Promise<void> {
     console.log('[Mirror] ✅ Initialization complete');
   } catch (error) {
     console.error('[Mirror] ❌ Initialization failed:', error);
-  }
-}
-
-/**
- * 拦截 API 请求（文件创建、删除、重命名）
- */
-function interceptDocRequests(): void {
-  console.log('[Mirror] 🔍 Setting up API request interception...');
-
-  // 劫持 fetch
-  const originalFetch = window.fetch;
-  window.fetch = async function(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-
-    // 🔧 检查是否是文件操作请求
-    if (url.includes('/project/') && url.includes('/doc')) {
-      const method = init?.method || 'GET';
-
-      // 文件创建：POST /project/{id}/doc
-      if (method === 'POST' && url.match(/\/project\/[^/]+\/doc$/)) {
-        console.log('[Mirror] ➕ Detected file creation request');
-
-        try {
-          // 调用原始 fetch 并获取响应
-          const response = await originalFetch.call(this, input, init);
-
-          // 克隆响应以便读取（响应只能读取一次）
-          const clonedResponse = response.clone();
-
-          try {
-            const data = await clonedResponse.json();
-            console.log('[Mirror] 📦 File creation response:', data);
-
-            if (data.name && mirrorClient && projectId) {
-              // 发送文件创建事件到服务器
-              mirrorClient.send({
-                type: 'file_created' as const,
-                project_id: projectId,
-                file_name: data.name,
-                file_id: data._id,
-                timestamp: Date.now()
-              });
-              console.log('[Mirror] ✅ Sent file creation event:', data.name);
-            }
-          } catch (parseError) {
-            console.error('[Mirror] ❌ Failed to parse response:', parseError);
-          }
-
-          // 返回原始响应
-          return response;
-        } catch (error) {
-          console.error('[Mirror] ❌ File creation request failed:', error);
-          return originalFetch.call(this, input, init);
-        }
-      }
-
-      // 文件删除：DELETE /project/{id}/doc/{doc_id}
-      if (method === 'DELETE' && url.match(/\/project\/[^/]+\/doc\/[^/]+$/)) {
-        console.log('[Mirror] 🗑️ Detected file deletion request:', url);
-
-        // 从 URL 中提取 doc_id
-        const docIdMatch = url.match(/\/doc\/([^/]+)$/);
-        if (docIdMatch && mirrorClient && projectId) {
-          const docId = docIdMatch[1];
-
-          mirrorClient.send({
-            type: 'file_deleted' as const,
-            project_id: projectId,
-            file_id: docId,
-            timestamp: Date.now()
-          });
-          console.log('[Mirror] ✅ Sent file deletion event:', docId);
-        }
-      }
-
-      // 文件重命名：PUT /project/{id}/doc/{doc_id}
-      if (method === 'PUT' && url.match(/\/project\/[^/]+\/doc\/[^/]+$/)) {
-        console.log('[Mirror] ✏️ Detected file rename request:', url);
-
-        try {
-          // 获取请求体（包含新文件名）
-          let requestBody: any = {};
-          if (init?.body) {
-            try {
-              requestBody = JSON.parse(init.body as string);
-            } catch (e) {
-              console.error('[Mirror] ❌ Failed to parse request body');
-            }
-          }
-
-          console.log('[Mirror] 📦 Rename request body:', requestBody);
-
-          // 调用原始 fetch 并获取响应
-          const response = await originalFetch.call(this, input, init);
-
-          // 克隆响应以便读取
-          const clonedResponse = response.clone();
-
-          try {
-            const data = await clonedResponse.json();
-            console.log('[Mirror] 📦 File rename response:', data);
-
-            if (data.name && mirrorClient && projectId) {
-              // 发送文件重命名事件到服务器
-              mirrorClient.send({
-                type: 'file_renamed' as const,
-                project_id: projectId,
-                old_name: requestBody.name || 'unknown',
-                new_name: data.name,
-                file_id: data._id,
-                timestamp: Date.now()
-              });
-              console.log('[Mirror] ✅ Sent file rename event:', requestBody.name, '->', data.name);
-            }
-          } catch (parseError) {
-            console.error('[Mirror] ❌ Failed to parse response:', parseError);
-          }
-
-          return response;
-        } catch (error) {
-          console.error('[Mirror] ❌ File rename request failed:', error);
-          return originalFetch.call(this, input, init);
-        }
-      }
-    }
-
-    // 🔧 检查是否是 blob 请求（文档内容获取）
-    if (url.includes('/project/') && url.includes('/blob/')) {
-      console.log('[Mirror] 📥 Detected blob fetch:', url);
-
-      // 从 URL 中提取 blob hash
-      // 格式: /project/{projectId}/blob/{blobHash}
-      const match = url.match(/\/project\/[^/]+\/blob\/([a-f0-9]+)/);
-      if (match) {
-        const blobHash = match[1];
-        console.log('[Mirror] 📋 Found blob hash:', blobHash);
-
-        // 🔧 需要从编辑器状态中获取当前文件名
-        const currentFile = getCurrentFileName();
-        if (currentFile) {
-          console.log('[Mirror] 📄 Current file:', currentFile);
-
-          // 发送映射关系到服务器
-          if (mirrorClient && projectId) {
-            mirrorClient.send({
-              type: 'blob_mapping' as const,
-              project_id: projectId,
-              blob_hash: blobHash,
-              filename: currentFile,
-              url: url
-            });
-            console.log('[Mirror] ✅ Sent blob mapping to server:', currentFile, '->', blobHash);
-          }
-        }
-      }
-    }
-
-    // 调用原始 fetch
-    return originalFetch.call(this, input, init);
-  };
-
-  console.log('[Mirror] ✅ API request interception set up');
-}
-
-/**
- * 获取当前编辑的文件名
- */
-function getCurrentFileName(): string | null {
-  try {
-    // 方法 1: 从 URL 路径提取
-    const urlPath = window.location.pathname;
-    const pathMatch = urlPath.match(/\/project\/[^/]+\/doc\/(.+)$/);
-    if (pathMatch && pathMatch[1]) {
-      return pathMatch[1];
-    }
-
-    // 方法 2: 从编辑器状态获取
-    if ((window as any).editor?.documentManager) {
-      const currentDoc = (window as any).editor.documentManager.getCurrentDoc();
-      if (currentDoc?.name) {
-        return currentDoc.name;
-      }
-    }
-
-    return null;
-  } catch (error) {
-    console.error('[Mirror] ❌ Error getting current file name:', error);
-    return null;
   }
 }
 
@@ -343,17 +153,17 @@ async function requestInitialSync(): Promise<void> {
     console.log('[Mirror] 🔌 Connecting to Overleaf WebSocket...');
 
     // Create and connect WebSocket client
-    const wsClient = new OverleafWebSocketClient(
+    overleafWsClient = new OverleafWebSocketClient(
       projectId,
       auth,
       csrfToken
     );
 
-    await wsClient.connect();
+    await overleafWsClient.connect();
     console.log('[Mirror] ✅ Connected to Overleaf WebSocket');
 
     // Sync all files
-    const syncedFiles = await wsClient.syncAllFiles();
+    const syncedFiles = await overleafWsClient.syncAllFiles();
 
     console.log('[Mirror] ✅ Synced', syncedFiles.length, 'files from Overleaf');
 
@@ -378,8 +188,71 @@ async function requestInitialSync(): Promise<void> {
 
     console.log('[Mirror] ✅ Initial sync complete!');
 
-    // Disconnect from Overleaf WebSocket
-    wsClient.disconnect();
+    // 🔧 Register callback for file operation events (keep connection alive)
+    overleafWsClient.onChange(async (change) => {
+      console.log(`[Mirror] 📢 File operation detected: ${change.type} - ${change.path}`);
+
+      if (change.type === 'created') {
+        // New file created - fetch content and send to server
+        if (mirrorClient && projectId) {
+          try {
+            const docInfo = overleafWsClient!.getDocInfo(change.docId);
+            if (docInfo) {
+              let content: string | ArrayBuffer;
+
+              if (docInfo.type === 'doc') {
+                // Fetch document content
+                const lines = await overleafWsClient!.joinDoc(change.docId);
+                await overleafWsClient!.leaveDoc(change.docId);
+                content = lines.join('\n');
+                console.log(`[Mirror] ✅ Fetched content for ${change.path} (${content.length} chars)`);
+              } else {
+                // For binary files, download via blob
+                content = await overleafWsClient!.downloadFile(change.docId);
+                console.log(`[Mirror] ✅ Downloaded ${change.path} (${(content as ArrayBuffer).byteLength} bytes)`);
+              }
+
+              // Send file creation event to mirror server
+              mirrorClient.send({
+                type: 'file_created' as const,
+                project_id: projectId,
+                file_name: change.path,
+                file_id: change.docId,
+                timestamp: Date.now()
+              });
+
+              // Send file content
+              mirrorClient.send({
+                type: 'file_sync' as const,
+                project_id: projectId,
+                path: change.path,
+                content_type: docInfo.type,
+                content: docInfo.type === 'file' ? arrayBufferToBase64(content as ArrayBuffer) : content as string,
+                timestamp: Date.now()
+              });
+
+              console.log(`[Mirror] ✅ Synced new file to mirror server: ${change.path}`);
+            }
+          } catch (error) {
+            console.error(`[Mirror] ❌ Failed to sync new file ${change.path}:`, error);
+          }
+        }
+      } else if (change.type === 'deleted') {
+        // File deleted - send deletion event to server
+        if (mirrorClient && projectId) {
+          mirrorClient.send({
+            type: 'file_deleted' as const,
+            project_id: projectId,
+            file_id: change.docId,
+            path: change.path,
+            timestamp: Date.now()
+          });
+          console.log(`[Mirror] ✅ Sent file deletion event: ${change.path}`);
+        }
+      }
+    });
+
+    console.log('[Mirror] ✅ File operation monitoring enabled');
   } catch (error) {
     console.error('[Mirror] ❌ Initial sync failed:', error);
   }
@@ -425,6 +298,9 @@ async function getCookies(): Promise<{ [key: string]: string }> {
 window.addEventListener('beforeunload', () => {
   if (editMonitor) {
     editMonitor.stop();
+  }
+  if (overleafWsClient) {
+    overleafWsClient.disconnect();
   }
   if (mirrorClient) {
     mirrorClient.disconnect();

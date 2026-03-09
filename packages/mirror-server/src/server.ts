@@ -265,8 +265,8 @@ export class MirrorServer {
       case 'file_deleted':
         // 🔧 处理文件删除
         const fileDeletedMsg = message as any;
-        console.log('[Server] 🗑️ Received file deletion event:', fileDeletedMsg.file_id);
-        this.handleFileDeleted(fileDeletedMsg.project_id, fileDeletedMsg.file_id);
+        console.log('[Server] 🗑️ Received file deletion event:', fileDeletedMsg.path);
+        this.handleFileDeleted(fileDeletedMsg.project_id, fileDeletedMsg.path);
         break;
       case 'file_renamed':
         // 🔧 处理文件重命名
@@ -457,20 +457,30 @@ export class MirrorServer {
    * 处理文件删除事件
    *
    * @param projectId - 项目 ID
-   * @param fileId - 文件 ID
+   * @param filePath - 文件路径
    * @private
    */
-  private handleFileDeleted(projectId: string, fileId: string): void {
+  private handleFileDeleted(projectId: string, filePath: string): void {
     try {
-      console.log('[Server] 🗑️ Deleting file with ID:', fileId);
+      console.log('[Server] 🗑️ Deleting file:', filePath);
 
-      // TODO: 实现 fileId 到 fileName 的映射
-      // 目前我们无法直接从 file_id 找到文件路径
-      // 需要维护一个 _id -> path 的映射表
+      const projectConfig = this.configStore.getProjectConfig(projectId);
+      const fs = require('fs');
+      const pathModule = require('path');
 
-      console.log('[Server] ⚠️ File deletion requires _id to path mapping, not yet implemented');
+      const fullPath = pathModule.join(projectConfig.localPath, filePath);
+
+      // 检查文件是否存在
+      if (!fs.existsSync(fullPath)) {
+        console.log('[Server] ⚠️ File not found:', fullPath, '(skipping)');
+        return;
+      }
+
+      // 删除文件
+      fs.unlinkSync(fullPath);
+      console.log('[Server] ✅ Deleted file:', filePath);
     } catch (error) {
-      console.error('[Server] ❌ Failed to delete file:', fileId, error);
+      console.error('[Server] ❌ Failed to delete file:', filePath, error);
     }
   }
 
