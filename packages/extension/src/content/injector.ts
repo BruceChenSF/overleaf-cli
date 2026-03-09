@@ -6,6 +6,7 @@ import { OverleafAPIHandler } from './overleaf-api-handler';
 let mirrorClient: MirrorClient | null = null;
 let editMonitor: EditMonitor | null = null;
 let overleafWsClient: OverleafWebSocketClient | null = null;
+let apiHandler: OverleafAPIHandler | null = null;
 
 // Extract project ID immediately (available at document_start)
 function extractProjectId(): string | null {
@@ -75,13 +76,15 @@ async function initializeMirror(): Promise<void> {
     }
 
     // Create API Handler
-    const apiHandler = new OverleafAPIHandler(mirrorClient, projectId);
+    apiHandler = new OverleafAPIHandler(mirrorClient, projectId);
 
     // Register message handler
     mirrorClient.onMessage((message: any) => {
       if (message.type === 'sync_to_overleaf') {
         console.log('[Mirror] Received sync_to_overleaf request:', message);
-        apiHandler.handleSyncRequest(message);
+        apiHandler.handleSyncRequest(message).catch((error) => {
+          console.error('[Mirror] ❌ Error handling sync request:', error);
+        });
       }
     });
 
@@ -331,5 +334,8 @@ window.addEventListener('beforeunload', () => {
   }
   if (mirrorClient) {
     mirrorClient.disconnect();
+  }
+  if (apiHandler) {
+    apiHandler = null;
   }
 });

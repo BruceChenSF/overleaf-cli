@@ -13,6 +13,7 @@ export class MirrorClient {
     reject: (error: Error) => void;
     timeout: ReturnType<typeof setTimeout>;
   }> = new Map();
+  private messageHandlers: ((message: any) => void)[] = [];
 
   constructor(wsUrl: string = 'ws://localhost:3456') {
     this.wsUrl = wsUrl;
@@ -31,6 +32,9 @@ export class MirrorClient {
         this.ws.onmessage = (event) => {
           try {
             const message = JSON.parse(event.data) as WSMessage;
+
+            // Notify all registered handlers
+            this.notifyMessageHandlers(message);
 
             if (message.type === 'ack') {
               this.handleAck(message);
@@ -126,6 +130,21 @@ export class MirrorClient {
     }
 
     this.ws.send(JSON.stringify(message));
+  }
+
+  onMessage(handler: (message: any) => void): void {
+    this.messageHandlers.push(handler);
+    console.log('[MirrorClient] Message handler registered');
+  }
+
+  private notifyMessageHandlers(message: any): void {
+    this.messageHandlers.forEach(handler => {
+      try {
+        handler(message);
+      } catch (error) {
+        console.error('[MirrorClient] Error in message handler:', error);
+      }
+    });
   }
 
   private handleAck(message: AckMessage & { request_id: string }): void {
