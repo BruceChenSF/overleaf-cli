@@ -57,13 +57,21 @@ export class OverleafAPIHandler {
         operation: message.operation,
         path: message.path,
         success: false,
-        error: error.message,
+        error: error instanceof Error ? error.message : String(error),
         timestamp: Date.now()
       });
     }
   }
 
   private async updateDocument(message: SyncToOverleafMessage): Promise<SyncToOverleafResponse> {
+    if (!message.doc_id) {
+      throw new Error('doc_id is required for update operation');
+    }
+
+    if (message.content === undefined) {
+      throw new Error('Content is required for update operation');
+    }
+
     const response = await fetch(
       `/project/${message.project_id}/doc/${message.doc_id}`,
       {
@@ -72,8 +80,8 @@ export class OverleafAPIHandler {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          lines: message.content!.split('\n'),
-          version: -1  // Local-first, force update
+          lines: message.content.split('\n'),
+          version: -1
         })
       }
     );
@@ -118,7 +126,17 @@ export class OverleafAPIHandler {
       throw new Error(`Create failed: ${response.status} ${response.statusText}`);
     }
 
-    const data = await response.json();
+    let data;
+    try {
+      data = await response.json();
+    } catch (parseError) {
+      throw new Error(`Failed to parse response: ${parseError}`);
+    }
+
+    if (!data._id) {
+      throw new Error('Response missing _id field');
+    }
+
     console.log(`[APIHandler] ✅ Created: ${message.path} (id: ${data._id})`);
 
     // Immediately update content
@@ -139,6 +157,10 @@ export class OverleafAPIHandler {
   }
 
   private async deleteDocument(message: SyncToOverleafMessage): Promise<SyncToOverleafResponse> {
+    if (!message.doc_id) {
+      throw new Error('doc_id is required for delete operation');
+    }
+
     const response = await fetch(
       `/project/${this.projectId}/doc/${message.doc_id}`,
       {
