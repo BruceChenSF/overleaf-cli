@@ -695,6 +695,12 @@ export class MirrorServer {
   private startFileSync(projectId: string, docIdToPath: Map<string, any>): void {
     console.log(`[Server] Starting file sync for project: ${projectId}`);
 
+    // Stop existing file sync if already running
+    if (this.fileWatchers.has(projectId) || this.syncManagers.has(projectId)) {
+      console.log(`[Server] Stopping existing file sync for project: ${projectId}`);
+      this.stopFileSync(projectId);
+    }
+
     // Get project config
     const config = this.configStore.getProjectConfig(projectId);
     if (!config || !config.localPath) {
@@ -716,14 +722,16 @@ export class MirrorServer {
       syncManager.handleFileChange(event);
     });
 
-    // Start watching
-    fileWatcher.start().catch((error) => {
-      console.error(`[Server] ❌ Failed to start file watcher:`, error);
-    });
-
     // Store instances
     this.fileWatchers.set(projectId, fileWatcher);
     this.syncManagers.set(projectId, syncManager);
+
+    // Start watching
+    fileWatcher.start().catch((error) => {
+      console.error(`[Server] ❌ Failed to start file watcher:`, error);
+      // Clean up both instances
+      this.stopFileSync(projectId);
+    });
 
     console.log(`[Server] ✅ File sync started for project: ${projectId}`);
   }

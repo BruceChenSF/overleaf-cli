@@ -170,6 +170,9 @@ export class OverleafSyncManager {
 
   stop(): void {
     if (this.wsClient) {
+      this.wsClient.removeAllListeners('message');
+      this.wsClient.removeAllListeners('open');
+      this.wsClient.removeAllListeners('error');
       this.wsClient.close();
       this.wsClient = null;
     }
