@@ -249,6 +249,19 @@ async function requestInitialSync(): Promise<void> {
           });
           console.log(`[Mirror] ✅ Sent file deletion event: ${change.path}`);
         }
+      } else if (change.type === 'renamed') {
+        // File renamed - send rename event to server
+        if (mirrorClient && projectId && change.oldPath) {
+          mirrorClient.send({
+            type: 'file_renamed' as const,
+            project_id: projectId,
+            old_name: change.oldPath,
+            new_name: change.path,
+            file_id: change.docId,
+            timestamp: Date.now()
+          });
+          console.log(`[Mirror] ✅ Sent file rename event: ${change.oldPath} -> ${change.path}`);
+        }
       }
     });
 

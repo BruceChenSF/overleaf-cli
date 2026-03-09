@@ -58,8 +58,9 @@ interface SyncedFile {
 }
 
 interface FileChange {
-  type: 'created' | 'modified' | 'deleted';
+  type: 'created' | 'modified' | 'deleted' | 'renamed';
   path: string;
+  oldPath?: string;
   docId: string;
 }
 
@@ -358,6 +359,53 @@ export class OverleafWebSocketClient {
           type: 'deleted',
           path: docInfo.path,
           docId: arg0.file
+        });
+      }
+    } else if (message.name === 'reciveEntityRename') {
+      // An entity (document or file) was renamed in Overleaf
+      console.log(`[Overleaf WS] 📢 reciveEntityRename received:`, message.args);
+
+      // message.args format: [entityId, newPath, entityType]
+      const entityId = message.args[0] as string;
+      const newPath = message.args[1] as string;
+      const entityType = message.args[2] as string;
+
+      console.log(`[Overleaf WS] 📝 Entity renamed: ${entityType} (${entityId}) -> ${newPath}`);
+
+      // Get old path from docId mapping
+      const docInfo = this.docIdToPath.get(entityId);
+
+      if (!docInfo) {
+        console.warn(`[Overleaf WS] ⚠️ Unknown entity ID ${entityId} in reciveEntityRename`);
+        // Still try to notify with just the new path
+        if (this.onChangeCallback) {
+          this.onChangeCallback({
+            type: 'renamed',
+            path: newPath,
+            docId: entityId
+          });
+        }
+        return;
+      }
+
+      const oldPath = docInfo.path;
+      console.log(`[Overleaf WS] ✅ Found old path for ${entityId}: ${oldPath}`);
+      console.log(`[Overleaf WS] ✅ Rename: ${oldPath} -> ${newPath}`);
+
+      // Update docId mapping with new path
+      this.docIdToPath.set(entityId, {
+        ...docInfo,
+        path: newPath
+      });
+      console.log(`[Overleaf WS] ✅ Updated mapping for ${entityId}: ${newPath}`);
+
+      if (this.onChangeCallback) {
+        console.log(`[Overleaf WS] 📤 Sending rename notification: ${oldPath} -> ${newPath}`);
+        this.onChangeCallback({
+          type: 'renamed',
+          path: newPath,
+          oldPath: oldPath,
+          docId: entityId
         });
       }
     }
