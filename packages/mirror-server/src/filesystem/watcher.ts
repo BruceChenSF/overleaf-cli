@@ -17,8 +17,6 @@ export class FileWatcher {
   private watcher: chokidar.FSWatcher | null = null;
   private onChangeCallback?: ChangeEventHandler;
   private projectDir: string;
-  private startTime: number = 0;
-  private silentPeriod: number = 3000; // 3 seconds silent period after start
 
   constructor(
     private projectId: string,
@@ -35,10 +33,6 @@ export class FileWatcher {
     console.log(`[FileWatcher] 🔧 Project ID: ${this.projectId}`);
     console.log(`[FileWatcher] 🔧 Watching directory: ${this.projectDir}`);
     console.log(`[FileWatcher] 🔧 Callback registered: ${this.onChangeCallback ? 'Yes' : 'No'}`);
-    console.log(`[FileWatcher] 🔧 Silent period: ${this.silentPeriod}ms`);
-
-    // Record start time for silent period
-    this.startTime = Date.now();
 
     this.watcher = chokidar.watch(this.projectDir, {
       ignored: /(^|[\/\\])\../, // ignore dotfiles
@@ -50,9 +44,9 @@ export class FileWatcher {
 
     this.watcher
       .on('add', (path) => {
-        // Ignore events during silent period
-        if (this.isInSilentPeriod()) {
-          console.log(`[FileWatcher] 🔇 Silencing add event during silent period: ${this.extractRelativePath(path)}`);
+        // Ignore events if syncing from Overleaf (set by server code)
+        if (isSyncingFromOverleaf(this.projectId)) {
+          console.log(`[FileWatcher] 🔇 Ignoring Overleaf → local save: ${this.extractRelativePath(path)}`);
           return;
         }
 
@@ -65,9 +59,9 @@ export class FileWatcher {
         });
       })
       .on('change', (path) => {
-        // Ignore events during silent period
-        if (this.isInSilentPeriod()) {
-          console.log(`[FileWatcher] 🔇 Silencing change event during silent period: ${this.extractRelativePath(path)}`);
+        // Ignore events if syncing from Overleaf (set by server code)
+        if (isSyncingFromOverleaf(this.projectId)) {
+          console.log(`[FileWatcher] 🔇 Ignoring Overleaf → local save: ${this.extractRelativePath(path)}`);
           return;
         }
 
@@ -80,9 +74,9 @@ export class FileWatcher {
         });
       })
       .on('unlink', (path) => {
-        // Ignore events during silent period
-        if (this.isInSilentPeriod()) {
-          console.log(`[FileWatcher] 🔇 Silencing unlink event during silent period: ${this.extractRelativePath(path)}`);
+        // Ignore events if syncing from Overleaf (set by server code)
+        if (isSyncingFromOverleaf(this.projectId)) {
+          console.log(`[FileWatcher] 🔇 Ignoring Overleaf → local save: ${this.extractRelativePath(path)}`);
           return;
         }
 
@@ -124,21 +118,6 @@ export class FileWatcher {
   }
 
   /**
-   * Check if currently in silent period (just after start)
-   * This prevents triggering sync for files saved during initial sync
-   */
-  private isInSilentPeriod(): boolean {
-    const elapsed = Date.now() - this.startTime;
-    const inSilentPeriod = elapsed < this.silentPeriod;
-
-    if (inSilentPeriod) {
-      console.log(`[FileWatcher] 🔇 In silent period: ${elapsed}ms < ${this.silentPeriod}ms`);
-    }
-
-    return inSilentPeriod;
-  }
-
-  /**
    * Extract relative path from full path
    */
   private extractRelativePath(fullPath: string): string {
@@ -146,6 +125,35 @@ export class FileWatcher {
       .replace(this.projectDir, '')
       .replace(/^\/+/, '');
   }
+}
+
+/**
+ * Global map to track which projects are currently syncing from Overleaf
+ * This prevents FileWatcher from triggering sync for files saved by the server itself
+ */
+const syncingFromOverleaf = new Map<string, boolean>();
+
+/**
+ * Check if a project is currently syncing from Overleaf
+ */
+export function isSyncingFromOverleaf(projectId: string): boolean {
+  return syncingFromOverleaf.get(projectId) || false;
+}
+
+/**
+ * Mark that a project is starting to sync from Overleaf
+ */
+export function startSyncingFromOverleaf(projectId: string): void {
+  syncingFromOverleaf.set(projectId, true);
+  console.log(`[FileWatcher] 🔄 Started syncing from Overleaf: ${projectId}`);
+}
+
+/**
+ * Mark that a project has finished syncing from Overleaf
+ */
+export function stopSyncingFromOverleaf(projectId: string): void {
+  syncingFromOverleaf.set(projectId, false);
+  console.log(`[FileWatcher] ✅ Finished syncing from Overleaf: ${projectId}`);
 }
 
 export type { FileChangeEvent, ChangeEventHandler };

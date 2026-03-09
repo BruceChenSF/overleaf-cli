@@ -3,6 +3,7 @@ import { Server as HttpServer } from 'http';
 import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { ClientConnection } from './client-connection';
 import { FileWatcher } from './filesystem/watcher';
+import { startSyncingFromOverleaf, stopSyncingFromOverleaf } from './filesystem/watcher';
 import { OverleafSyncManager } from './sync/overleaf-sync-manager';
 import { handleEditMonitor } from './handlers/edit-monitor';
 import { FileOperationHandler } from './handlers/file-operation';
@@ -404,6 +405,9 @@ export class MirrorServer {
     try {
       console.log('[Server] 📥 Saving file:', path, 'type:', contentType);
 
+      // 🔧 Mark that we're saving file synced from Overleaf
+      startSyncingFromOverleaf(projectId);
+
       // 获取项目配置
       const projectConfig = this.configStore.getProjectConfig(projectId);
       const fs = require('fs');
@@ -428,8 +432,14 @@ export class MirrorServer {
         fs.writeFileSync(filePath, content, 'utf8');
         console.log('[Server] ✅ Saved text file:', path, `(${content.length} chars) to`, filePath);
       }
+
+      // 🔧 Clear the flag after saving
+      stopSyncingFromOverleaf(projectId);
     } catch (error) {
       console.error('[Server] ❌ Failed to save file:', path, error);
+
+      // 🔧 Make sure to clear the flag even if save failed
+      stopSyncingFromOverleaf(projectId);
     }
   }
 
@@ -613,6 +623,9 @@ export class MirrorServer {
       const allIds = wsClient.getAllDocIds();
       console.log('[Server] ✅ Found', allIds.length, 'files in project');
 
+      // 🔧 Mark that we're syncing from Overleaf (so FileWatcher ignores these saves)
+      startSyncingFromOverleaf(projectId);
+
       // 同步所有文件
       let syncedCount = 0;
       for (const id of allIds) {
@@ -677,6 +690,9 @@ export class MirrorServer {
         }
       }
 
+      // 🔧 Mark that we're done syncing from Overleaf
+      stopSyncingFromOverleaf(projectId);
+
       // 断开 WebSocket 连接
       wsClient.disconnect();
 
@@ -684,6 +700,9 @@ export class MirrorServer {
     } catch (error) {
       console.error('[Server] ❌ Initial sync failed:', error);
       console.error('[Server] ⚠️ Will still attempt to start file sync if enabled...');
+
+      // 🔧 Make sure to clear the flag even if sync failed
+      stopSyncingFromOverleaf(projectId);
     }
 
     // 🔧 Start file sync if enabled (do this outside try-catch so it runs even if initial sync fails)
