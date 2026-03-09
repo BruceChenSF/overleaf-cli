@@ -10,7 +10,7 @@ import { ProjectConfigStore } from './config';
 import { OverleafAPIClient } from './api';
 import { OverleafWebSocketClient } from './overleaf-websocket';
 import { TextFileSyncManager } from './sync';
-import type { WSMessage, SyncCommandMessage } from './types';
+import type { WSMessage, SyncCommandMessage, ServerConfig } from './types';
 import type { EditEventMessage } from '@overleaf-cc/shared';
 import type { FileChangeEvent } from './filesystem/watcher';
 
@@ -29,6 +29,7 @@ export class MirrorServer {
   private projectCookies: Map<string, Map<string, string>> = new Map();
   private projectCsrfTokens: Map<string, string> = new Map(); // Store CSRF tokens
   private fileHandlers: Map<string, FileOperationHandler> = new Map();
+  private config: ServerConfig;
 
   // 🔧 存储 blob hash 到文件名的映射
   private blobMappings: Map<string, Map<string, string>> = new Map(); // projectId -> Map<blobHash, filename>
@@ -46,6 +47,15 @@ export class MirrorServer {
     });
 
     this.setupWebSocketServer();
+
+    // Initialize server config
+    this.config = {
+      port: PORT,
+      host: 'localhost',
+      projectDir: './projects',
+      maxConnections: 100,
+      enableLogging: true,
+    };
 
     // Initialize ProjectConfigStore
     this.configStore = new ProjectConfigStore();

@@ -14,7 +14,8 @@ export type WSMessage =
   | FileSyncMessage
   | FileCreatedMessage
   | FileDeletedMessage
-  | FileRenamedMessage;
+  | FileRenamedMessage
+  | SyncToOverleafResponse;
 
 export interface FileCreatedMessage {
   type: 'file_created';
