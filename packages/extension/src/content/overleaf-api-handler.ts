@@ -1,5 +1,6 @@
 import { MirrorClient } from '../client';
 import { OverleafWebSocketClient } from './overleaf-sync';
+import { EditorUpdater } from './editor-updater';
 
 interface SyncToOverleafMessage {
   type: 'sync_to_overleaf';
@@ -23,11 +24,15 @@ interface SyncToOverleafResponse {
 }
 
 export class OverleafAPIHandler {
+  private editorUpdater: EditorUpdater;
+
   constructor(
     private mirrorClient: MirrorClient,
     private projectId: string,
     private overleafWsClient: OverleafWebSocketClient | null = null
-  ) {}
+  ) {
+    this.editorUpdater = new EditorUpdater();
+  }
 
   private async retryWithBackoff<T>(
     fn: () => Promise<T>,
@@ -98,61 +103,25 @@ export class OverleafAPIHandler {
       throw new Error('Content is required for update operation');
     }
 
-    // Use WebSocket client to update document (preferred method)
-    if (this.overleafWsClient) {
-      console.log(`[APIHandler] 📝 Updating doc via WebSocket: ${message.path}`);
-      try {
-        await this.overleafWsClient.updateDoc(message.doc_id, message.content);
-        console.log(`[APIHandler] ✅ Updated via WebSocket: ${message.path}`);
+    // Use EditorUpdater to update document by simulating human editing
+    console.log(`[APIHandler] 📝 Updating doc via EditorUpdater: ${message.path}`);
 
-        return {
-          type: 'sync_to_overleaf_response',
-          project_id: this.projectId,
-          operation: 'update',
-          path: message.path,
-          success: true,
-          timestamp: Date.now()
-        };
-      } catch (error) {
-        console.error(`[APIHandler] ❌ WebSocket update failed:`, error);
-        throw error;
-      }
+    try {
+      await this.editorUpdater.updateDocument(message.doc_id, message.content);
+      console.log(`[APIHandler] ✅ Updated via EditorUpdater: ${message.path}`);
+
+      return {
+        type: 'sync_to_overleaf_response',
+        project_id: this.projectId,
+        operation: 'update',
+        path: message.path,
+        success: true,
+        timestamp: Date.now()
+      };
+    } catch (error) {
+      console.error(`[APIHandler] ❌ EditorUpdater failed:`, error);
+      throw error;
     }
-
-    // Fallback to REST API (will likely fail with 403, but keep for reference)
-    console.warn(`[APIHandler] ⚠️ No WebSocket client, attempting REST API (may fail with 403)`);
-
-    const response = await this.retryWithBackoff(
-      async () => await fetch(
-        `/project/${message.project_id}/doc/${message.doc_id}`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            lines: message.content.split('\n'),
-            version: -1
-          })
-        }
-      ),
-      `Update ${message.path}`
-    );
-
-    if (!response.ok) {
-      throw new Error(`Update failed: ${response.status} ${response.statusText}`);
-    }
-
-    console.log(`[APIHandler] ✅ Updated: ${message.path}`);
-
-    return {
-      type: 'sync_to_overleaf_response',
-      project_id: this.projectId,
-      operation: 'update',
-      path: message.path,
-      success: true,
-      timestamp: Date.now()
-    };
   }
 
   private async createDocument(message: SyncToOverleafMessage): Promise<SyncToOverleafResponse> {
