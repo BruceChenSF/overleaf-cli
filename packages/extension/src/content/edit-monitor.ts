@@ -64,6 +64,32 @@ export class EditMonitor {
   }
 
   /**
+   * 检查编辑器是否正在被更新（防止循环同步）
+   *
+   * @returns 更新信息或 null
+   * @private
+   */
+  private getEditorUpdateInfo(): { docId: string; timestamp: number; content: string } | null {
+    const UPDATE_FLAG = '__overleaf_cc_editor_updating__';
+    const UPDATE_TIMEOUT = 5000; // 5 seconds
+
+    const info = (window as any)[UPDATE_FLAG];
+
+    if (!info) {
+      return null;
+    }
+
+    // Check for stale flags
+    if (Date.now() - info.timestamp > UPDATE_TIMEOUT) {
+      console.warn('[EditMonitor] ⚠️ Found stale update flag, clearing');
+      delete (window as any)[UPDATE_FLAG];
+      return null;
+    }
+
+    return info;
+  }
+
+  /**
    * 设置 WebSocket 消息监听
    *
    * 注入页面脚本来劫持 WebSocket.send()。
@@ -125,6 +151,14 @@ export class EditMonitor {
 
       if (!ops || !Array.isArray(ops)) {
         console.warn('[EditMonitor] ⚠️ Invalid ops in event:', data);
+        return;
+      }
+
+      // 🔥 Check if editor is being updated by EditorUpdater (prevent circular sync)
+      const updateInfo = this.getEditorUpdateInfo();
+      if (updateInfo && updateInfo.docId === doc_id) {
+        console.log(`[EditMonitor] 🔇 Ignoring edit event (editor is being updated by us): ${doc_id}`);
+        console.log(`[EditMonitor] 🔇 Update was triggered ${Date.now() - updateInfo.timestamp}ms ago`);
         return;
       }
 
