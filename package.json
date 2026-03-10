@@ -4,10 +4,13 @@
   "private": true,
   "description": "Overleaf Mirror - Bidirectional file sync for Claude Code",
   "scripts": {
-    "build": "pnpm --filter './packages/*' build",
+    "build": "pnpm -r --workspace-concurrency=1 build",
+    "build:parallel": "pnpm -r build",
+    "build:script": "node scripts/build-all.js",
     "dev:server": "pnpm --filter @overleaf-cc/mirror-server dev",
     "dev:extension": "pnpm --filter @overleaf-cc/extension dev",
-    "test": "pnpm --filter './packages/*' test"
+    "test": "pnpm -r test",
+    "clean": "pnpm -r exec -- rm -rf dist"
   },
   "devDependencies": {
     "typescript": "^5.3.0",

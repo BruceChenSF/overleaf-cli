@@ -1,21 +1,11 @@
 #!/usr/bin/env node
 import { MirrorServer } from './server';
-import * as fs from 'fs';
-import * as path from 'path';
-
-// Get project directory from command line args or use default
-const projectDir = process.argv[2] || path.join(process.env.HOME || process.env.USERPROFILE || '', 'OverleafProjects');
-
-// Ensure project directory exists
-if (!fs.existsSync(projectDir)) {
-  console.log(`Creating project directory: ${projectDir}`);
-  fs.mkdirSync(projectDir, { recursive: true });
-}
+import { homedir } from 'os';
 
 console.log('='.repeat(60));
 console.log('🚀 Overleaf Mirror Server');
 console.log('='.repeat(60));
-console.log(`📁 Project directory: ${projectDir}`);
+console.log(`📁 Default mirror directory: ${homedir()}/overleaf-mirror`);
 console.log('');
 
 // Create and start the server

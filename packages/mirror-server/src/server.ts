@@ -9,7 +9,6 @@ import { handleEditMonitor } from './handlers/edit-monitor';
 import { FileOperationHandler } from './handlers/file-operation';
 import { ProjectConfigStore } from './config';
 import { OverleafAPIClient } from './api';
-import { OverleafWebSocketClient } from './overleaf-websocket';
 import { TextFileSyncManager } from './sync';
 import type { WSMessage, SyncCommandMessage, ServerConfig } from './types';
 import type { EditEventMessage } from '@overleaf-cc/shared';
@@ -566,155 +565,28 @@ export class MirrorServer {
     const projectConfig = this.configStore.getProjectConfig(projectId);
     console.log('[Server] 📂 Local path:', projectConfig.localPath);
 
+    // 确保项目目录存在
+    const fs = await import('fs-extra');
+    await fs.ensureDir(projectConfig.localPath);
+    console.log('[Server] ✅ Project directory created/verified:', projectConfig.localPath);
+
     // Build docIdToPath mapping - 必须在 try 块外
     const docIdToPath = new Map<string, any>();
 
-    try {
-      console.log('[Server] 🔄 Handling initial sync for project:', projectId);
+    console.log('[Server] 🔄 Waiting for browser extension to send files...');
+    console.log('[Server] ℹ️ Browser extension will handle Overleaf WebSocket connection and file fetching');
+    console.log('[Server] ℹ️ Files will be received via file_sync messages');
 
-      // 获取 cookies
-      const cookies = this.projectCookies.get(projectId);
-      if (!cookies) {
-        console.error('[Server] ❌ No cookies for project, cannot sync:', projectId);
-        return;
-      }
+    // 注意：实际的文件同步现在由浏览器扩展处理：
+    // 1. 浏览器扩展连接到 Overleaf WebSocket（使用原生浏览器 WebSocket）
+    // 2. 浏览器扩展获取所有文件内容
+    // 3. 浏览器扩展通过 file_sync 消息发送文件到这个服务器
+    // 4. 服务器接收文件并保存到本地
 
-      console.log('[Server] ✅ Found', cookies.size, 'cookies for sync');
+    // Save configuration
+    await this.configStore.save();
 
-      // 🔧 使用 WebSocket 客户端同步所有文件
-      const overleafSession2 = cookies.get('overleaf_session2');
-      const GCLB = cookies.get('GCLB');
-
-      if (!overleafSession2) {
-        console.error('[Server] ❌ Missing overleaf_session2 cookie');
-        return;
-      }
-
-      // 获取 CSRF token（从存储的 map 中查找）
-      const csrfToken = this.projectCsrfTokens.get(projectId) || '';
-
-      if (!csrfToken) {
-        console.warn('[Server] ⚠️ No CSRF token found, WebSocket connection may fail');
-      } else {
-        console.log('[Server] ✅ Using CSRF token:', csrfToken.substring(0, 20) + '...');
-      }
-
-      console.log('[Server] 🔌 Connecting to Overleaf WebSocket...');
-
-      // 从 cookies Map 转换为 auth 对象
-      const auth = {
-        cookieOverleafSession2: overleafSession2,
-        cookieGCLB: GCLB || ''
-      };
-
-      // 创建 WebSocket 客户端
-      const wsClient = new OverleafWebSocketClient(
-        projectId,
-        auth,
-        csrfToken
-      );
-
-      // 连接到 WebSocket
-      await wsClient.connect();
-
-      // 加入项目获取结构
-      await wsClient.joinProject();
-
-      // 等待项目结构加载
-      await wsClient.waitForProjectJoin();
-
-      console.log('[Server] 📋 Project structure loaded, fetching files...');
-
-      // 获取所有文件 ID
-      const allIds = wsClient.getAllDocIds();
-      console.log('[Server] ✅ Found', allIds.length, 'files in project');
-
-      // 同步所有文件
-      let syncedCount = 0;
-      for (const id of allIds) {
-        try {
-          const info = wsClient.getDocInfo(id);
-          if (!info) {
-            console.warn('[Server] ⚠️ No info found for', id, ', skipping');
-            continue;
-          }
-
-          console.log('[Server] 📥 Syncing:', info.path);
-
-          if (info.type === 'doc') {
-            // 文本文件 - 使用 joinDoc 获取内容
-            const lines = await wsClient.joinDoc(id);
-            await wsClient.leaveDoc(id);
-
-            // 写入本地文件
-            const fs = require('fs');
-            const pathModule = require('path');
-            const filePath = pathModule.join(projectConfig.localPath, info.path);
-
-            // 确保目录存在
-            const dir = pathModule.dirname(filePath);
-            if (!fs.existsSync(dir)) {
-              fs.mkdirSync(dir, { recursive: true });
-            }
-
-            // 🔧 Create marker file BEFORE saving
-            const syncId = startFileSync(projectId, projectConfig.localPath, info.path);
-
-            // 写入文件
-            const content = lines.join('\n');
-            fs.writeFileSync(filePath, content, 'utf8');
-            console.log('[Server] ✅ Saved:', info.path, `(${content.length} chars, ${lines.length} lines)`);
-            syncedCount++;
-
-            // 🔧 Remove marker file AFTER saving
-            endFileSync(syncId);
-
-            // Add to mapping
-            docIdToPath.set(id, { path: info.path, type: 'doc' });
-          } else if (info.type === 'file') {
-            // 二进制文件 - 使用 downloadFile 获取内容
-            const buffer = await wsClient.downloadFile(id);
-
-            // 写入本地文件
-            const fs = require('fs');
-            const pathModule = require('path');
-            const filePath = pathModule.join(projectConfig.localPath, info.path);
-
-            // 确保目录存在
-            const dir = pathModule.dirname(filePath);
-            if (!fs.existsSync(dir)) {
-              fs.mkdirSync(dir, { recursive: true });
-            }
-
-            // 🔧 Create marker file BEFORE saving
-            const syncId = startFileSync(projectId, projectConfig.localPath, info.path);
-
-            // 写入二进制文件
-            fs.writeFileSync(filePath, buffer);
-            console.log('[Server] ✅ Saved:', info.path, `(${buffer.length} bytes, binary)`);
-            syncedCount++;
-
-            // 🔧 Remove marker file AFTER saving
-            endFileSync(syncId);
-
-            // Add to mapping
-            docIdToPath.set(id, { path: info.path, type: 'file' });
-          }
-        } catch (error) {
-          console.error('[Server] ❌ Failed to sync', id, ':', error);
-        }
-      }
-
-      // 断开 WebSocket 连接
-      wsClient.disconnect();
-
-      console.log('[Server] ✅ Initial sync complete:', syncedCount, 'files downloaded to', projectConfig.localPath);
-    } catch (error) {
-      console.error('[Server] ❌ Initial sync failed:', error);
-      console.error('[Server] ⚠️ Will still attempt to start file sync if enabled...');
-    }
-
-    // 🔧 Start file sync if enabled (do this outside try-catch so it runs even if initial sync fails)
+    // Start file sync if enabled
     console.log(`[Server] 🔍 Checking file sync config...`);
     console.log(`[Server] 🔍 enableFileSync value:`, projectConfig.enableFileSync);
     console.log(`[Server] 🔍 Project config:`, JSON.stringify(projectConfig, null, 2));

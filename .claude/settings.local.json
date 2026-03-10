@@ -47,7 +47,9 @@
       "Bash(git stash:*)",
       "Bash(timeout:*)",
       "Bash(exit:*)",
-      "Bash(del:*)"
+      "Bash(del:*)",
+      "Bash(pnpm:*)",
+      "Bash(npm --version)"
     ]
   },
   "enabledPlugins": {
