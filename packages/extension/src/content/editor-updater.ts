@@ -23,7 +23,16 @@ export class EditorUpdater {
   async updateDocument(docId: string, content: string): Promise<void> {
     console.log(`[EditorUpdater] 📝 Updating doc: ${docId}`);
 
-    // 🔥 Set flag to prevent EditMonitor from picking up this change
+    // Find the CodeMirror 6 content element
+    const cmContent = document.querySelector('.cm-content');
+
+    if (!cmContent) {
+      throw new Error('CodeMirror editor not found');
+    }
+
+    console.log(`[EditorUpdater] ✅ Found .cm-content element`);
+
+    // 🔥 Set flag BEFORE updating to prevent EditMonitor from picking up this change
     (window as any)[UPDATE_FLAG] = {
       docId,
       timestamp: Date.now(),
@@ -32,15 +41,6 @@ export class EditorUpdater {
     console.log(`[EditorUpdater] 🔒 Set update flag to prevent circular sync`);
 
     try {
-      // Find the CodeMirror 6 content element
-      const cmContent = document.querySelector('.cm-content');
-
-      if (!cmContent) {
-        throw new Error('CodeMirror editor not found');
-      }
-
-      console.log(`[EditorUpdater] ✅ Found .cm-content element`);
-
       // Directly update the textContent
       // CodeMirror 6 will detect the change via MutationObserver
       // Overleaf will auto-save
@@ -48,11 +48,12 @@ export class EditorUpdater {
 
       console.log(`[EditorUpdater] ✅ Updated content (${content.length} chars)`);
 
-      // Wait a bit for the change to propagate, then clear flag
-      // This gives time for Overleaf to process but prevents old flags from lingering
-      setTimeout(() => {
-        this.clearUpdateFlag();
-      }, 2000);
+      // Wait for a short delay to ensure the edit events have been processed
+      // This ensures our flag is still set when EditMonitor checks
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // Now clear the flag
+      this.clearUpdateFlag();
 
     } catch (error) {
       // Clear flag on error
