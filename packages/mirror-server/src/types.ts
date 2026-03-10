@@ -15,6 +15,7 @@ export type WSMessage =
   | FileCreatedMessage
   | FileDeletedMessage
   | FileRenamedMessage
+  | SyncToOverleafMessage
   | SyncToOverleafResponse;
 
 export interface FileCreatedMessage {
@@ -56,6 +57,7 @@ export interface FileSyncMessage {
   path: string;
   content_type: 'doc' | 'file';
   content: string; // Base64 encoded for files, plain text for docs
+  doc_id?: string; // Optional doc_id for mapping path to docId
   timestamp: number;
 }
 

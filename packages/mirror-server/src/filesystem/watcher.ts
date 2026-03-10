@@ -37,6 +37,11 @@ export class FileWatcher {
       ignored: /(^|[\/\\])\../, // ignore dotfiles
       persistent: true,
       ignoreInitial: true, // Don't trigger for existing files
+      awaitWriteFinish: true, // 🔧 Wait for write completion before triggering event
+      usePolling: false, // 🔧 Use native file watching (more efficient, less false positives)
+      atomic: 1000, // 🔧 Wait 1s after last change before considering write complete (reduces duplicate events)
+      followSymlinks: false, // Don't follow symbolic links
+      depth: 99 // Watch subdirectories
     });
 
     this.watcher

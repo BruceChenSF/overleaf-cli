@@ -297,6 +297,11 @@ export class MirrorServer {
         console.log('[Server] ✏️ Received file rename event:', fileRenamedMsg.old_name, '->', fileRenamedMsg.new_name);
         this.handleFileRenamed(fileRenamedMsg.project_id, fileRenamedMsg.old_name, fileRenamedMsg.new_name);
         break;
+      case 'sync_to_overleaf':
+        // 🔧 Forward sync request to browser extension
+        console.log('[Server] 📤 Forwarding sync request to browser extension:', (message as any).path);
+        this.broadcastToExtensions(message);
+        break;
       case 'sync_to_overleaf_response':
         this.handleSyncResponse(message);
         break;
@@ -737,7 +742,35 @@ export class MirrorServer {
 
   broadcast(message: WSMessage): void {
     this.connections.forEach((connection) => {
-      // Handle broadcasting if needed
+      if (connection.isOpen()) {
+        connection.getWebSocket().send(JSON.stringify(message));
+      }
+    });
+  }
+
+  /**
+   * Broadcast message to all connected browser extensions
+   * Used for forwarding sync requests
+   *
+   * @param message - Message to broadcast
+   * @private
+   */
+  private broadcastToExtensions(message: any): void {
+    const connectedCount = Array.from(this.connections.values()).filter(
+      (conn) => conn.isOpen()
+    ).length;
+
+    console.log(`[Server] 📡 Broadcasting to ${connectedCount} connected extension(s)`);
+
+    this.connections.forEach((connection) => {
+      if (connection.isOpen()) {
+        try {
+          connection.getWebSocket().send(JSON.stringify(message));
+          console.log(`[Server] ✅ Sent to extension:`, message.type);
+        } catch (error) {
+          console.error(`[Server] ❌ Failed to send to extension:`, error);
+        }
+      }
     });
   }
 

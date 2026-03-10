@@ -10,6 +10,14 @@ export class ClientConnection {
     return this.projectId;
   }
 
+  getWebSocket(): WebSocket {
+    return this.ws;
+  }
+
+  isOpen(): boolean {
+    return this.ws.readyState === WebSocket.OPEN;
+  }
+
   sendMirrorRequest(data: MirrorRequestMessage): void {
     this.send({ ...data, type: 'mirror' });
   }
