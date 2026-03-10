@@ -600,19 +600,20 @@ export class OverleafWebSocketClient {
 
     console.log(`[Overleaf WS] 📤 Sending ${ops.length} operations for update`);
 
-    // Send operations
-    await this.sendRequest({
+    // Send operations (don't wait for response, just send)
+    this.sendRequest({
       name: 'applyOtUpdate',
       args: [docId, ops]
+    }).catch((error) => {
+      console.error(`[Overleaf WS] ❌ applyOtUpdate failed:`, error);
     });
 
-    // Leave document
-    await this.sendRequest({
-      name: 'leaveDoc',
-      args: [docId]
-    });
+    // Note: We don't call leaveDoc here because:
+    // 1. Overleaf may not expect/require it after updates
+    // 2. It may timeout waiting for a response that never comes
+    // 3. The document will be auto-left after inactivity
 
-    console.log(`[Overleaf WS] ✅ Updated doc: ${docId}`);
+    console.log(`[Overleaf WS] ✅ Update sent for doc: ${docId}`);
   }
 
   /**
