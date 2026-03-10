@@ -208,6 +208,7 @@ async function requestInitialSync(): Promise<void> {
         project_id: projectId,
         path: file.path,
         content_type: file.type,
+        doc_id: file.docId,  // 🔧 Include docId for mapping
         content: file.type === 'file'
           ? arrayBufferToBase64(file.content as ArrayBuffer)
           : file.content,
@@ -259,6 +260,7 @@ async function requestInitialSync(): Promise<void> {
                 project_id: projectId,
                 path: change.path,
                 content_type: docInfo.type,
+                doc_id: change.docId,  // 🔧 Include docId
                 content: docInfo.type === 'file' ? arrayBufferToBase64(content as ArrayBuffer) : content as string,
                 timestamp: Date.now()
               });

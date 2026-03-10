@@ -55,6 +55,7 @@ interface SyncedFile {
   path: string;
   content: string | ArrayBuffer;
   type: 'doc' | 'file';
+  docId: string;  // 🔧 Add docId for mapping
 }
 
 interface FileChange {
@@ -633,7 +634,8 @@ export class OverleafWebSocketClient {
           syncedFiles.push({
             path: info.path,
             content: content,
-            type: 'doc'
+            type: 'doc',
+            docId: id  // 🔧 Include docId
           });
           console.log('[Overleaf WS] ✅ Synced:', info.path, `(${content.length} chars, ${lines.length} lines)`);
         } else if (info.type === 'file') {
@@ -641,7 +643,8 @@ export class OverleafWebSocketClient {
           syncedFiles.push({
             path: info.path,
             content: buffer,
-            type: 'file'
+            type: 'file',
+            docId: id  // 🔧 Include docId
           });
           console.log('[Overleaf WS] ✅ Synced:', info.path, `(${buffer.byteLength} bytes, binary)`);
         }

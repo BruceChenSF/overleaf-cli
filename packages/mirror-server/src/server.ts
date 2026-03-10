@@ -271,7 +271,7 @@ export class MirrorServer {
         // 🔧 处理文件同步（从浏览器扩展接收文件内容）
         const fileSyncMsg = message as any;
         console.log('[Server] 📥 Received file sync:', fileSyncMsg.path);
-        this.handleFileSync(fileSyncMsg.project_id, fileSyncMsg.path, fileSyncMsg.content_type, fileSyncMsg.content);
+        this.handleFileSync(fileSyncMsg.project_id, fileSyncMsg.path, fileSyncMsg.content_type, fileSyncMsg.content, fileSyncMsg.doc_id);
         break;
       case 'blob_mapping':
         // 🔧 处理 blob 映射
@@ -408,9 +408,10 @@ export class MirrorServer {
    * @param path - 文件路径
    * @param contentType - 内容类型
    * @param content - 内容（Base64 编码的二进制文件或纯文本）
+   * @param docId - Overleaf 文档 ID（可选，用于建立映射）
    * @private
    */
-  private handleFileSync(projectId: string, path: string, contentType: 'doc' | 'file', content: string): void {
+  private handleFileSync(projectId: string, path: string, contentType: 'doc' | 'file', content: string, docId?: string): void {
     let syncId: string | null = null;
 
     try {
@@ -442,6 +443,18 @@ export class MirrorServer {
         // 文本文件 - 直接写入
         fs.writeFileSync(filePath, content, 'utf8');
         console.log('[Server] ✅ Saved text file:', path, `(${content.length} chars) to`, filePath);
+      }
+
+      // 🔧 IMPORTANT: Update docId mapping if docId is provided
+      // This allows OverleafSyncManager to correctly determine update vs create operations
+      if (docId) {
+        const syncManager = this.syncManagers.get(projectId);
+        if (syncManager) {
+          syncManager.updateMapping(path, docId);
+          console.log(`[Server] 📝 Updated docId mapping from initial sync: ${path} -> ${docId}`);
+        } else {
+          console.log(`[Server] ⚠️ No syncManager found for ${projectId}, mapping will be updated later`);
+        }
       }
 
       // 🔧 Remove marker file AFTER saving (FileWatcher can now detect user edits)
