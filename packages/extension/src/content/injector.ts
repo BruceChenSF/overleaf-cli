@@ -86,7 +86,7 @@ async function initializeMirror(): Promise<void> {
     }
 
     // Create API Handler
-    apiHandler = new OverleafAPIHandler(mirrorClient, projectId);
+    apiHandler = new OverleafAPIHandler(mirrorClient, projectId, overleafWsClient);
 
     // Register message handler
     mirrorClient.onMessage((message: any) => {

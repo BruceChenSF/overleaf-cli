@@ -568,6 +568,89 @@ export class OverleafWebSocketClient {
   }
 
   /**
+   * Update document content using WebSocket
+   * This is the preferred method for updating documents (vs REST API)
+   */
+  async updateDoc(docId: string, newContent: string): Promise<void> {
+    console.log(`[Overleaf WS] 📝 Updating doc: ${docId}`);
+
+    // Join document to get current version
+    const contentData = await this.sendRequest({
+      name: 'joinDoc',
+      args: [docId, { encodeRanges: true }],
+    });
+
+    const currentLines = contentData[1] || [];
+    const version = contentData[2] || 0;
+
+    // Decode current lines
+    const decodedCurrentLines = currentLines.map((line: string) => {
+      try {
+        const bytes = new Uint8Array([...line].map((c) => c.charCodeAt(0)));
+        return new TextDecoder('utf-8').decode(bytes);
+      } catch (e) {
+        return line;
+      }
+    });
+
+    const newLines = newContent.split('\n');
+
+    // Calculate operations to transform current -> new
+    const ops = this.calculateOps(decodedCurrentLines, newLines, version);
+
+    console.log(`[Overleaf WS] 📤 Sending ${ops.length} operations for update`);
+
+    // Send operations
+    await this.sendRequest({
+      name: 'applyOtUpdate',
+      args: [docId, ops]
+    });
+
+    // Leave document
+    await this.sendRequest({
+      name: 'leaveDoc',
+      args: [docId]
+    });
+
+    console.log(`[Overleaf WS] ✅ Updated doc: ${docId}`);
+  }
+
+  /**
+   * Calculate operations to transform oldLines into newLines
+   * Simple implementation: delete all, then insert all
+   */
+  private calculateOps(oldLines: string[], newLines: string[], baseVersion: number): any[] {
+    const ops = [];
+    let v = baseVersion;
+
+    // Delete all existing lines (in reverse order to maintain indices)
+    for (let i = oldLines.length - 1; i >= 0; i--) {
+      ops.push({
+        d: i,  // delete at line i
+        v: v   // version
+      });
+      v++;
+    }
+
+    // Insert all new lines
+    for (let i = 0; i < newLines.length; i++) {
+      // Encode line to UTF-8
+      const encoder = new TextEncoder();
+      const encoded = encoder.encode(newLines[i]);
+      const encodedLine = String.fromCharCode(...encoded);
+
+      ops.push({
+        i: i,          // insert at line i
+        t: encodedLine, // text to insert (encoded)
+        v: v           // version
+      });
+      v++;
+    }
+
+    return ops;
+  }
+
+  /**
    * Download binary file by blob hash
    */
   async downloadFile(fileRefId: string): Promise<ArrayBuffer> {

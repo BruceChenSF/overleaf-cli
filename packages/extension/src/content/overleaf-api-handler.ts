@@ -1,4 +1,5 @@
 import { MirrorClient } from '../client';
+import { OverleafWebSocketClient } from './overleaf-sync';
 
 interface SyncToOverleafMessage {
   type: 'sync_to_overleaf';
@@ -24,7 +25,8 @@ interface SyncToOverleafResponse {
 export class OverleafAPIHandler {
   constructor(
     private mirrorClient: MirrorClient,
-    private projectId: string
+    private projectId: string,
+    private overleafWsClient: OverleafWebSocketClient | null = null
   ) {}
 
   private async retryWithBackoff<T>(
@@ -95,6 +97,30 @@ export class OverleafAPIHandler {
     if (message.content === undefined) {
       throw new Error('Content is required for update operation');
     }
+
+    // Use WebSocket client to update document (preferred method)
+    if (this.overleafWsClient) {
+      console.log(`[APIHandler] 📝 Updating doc via WebSocket: ${message.path}`);
+      try {
+        await this.overleafWsClient.updateDoc(message.doc_id, message.content);
+        console.log(`[APIHandler] ✅ Updated via WebSocket: ${message.path}`);
+
+        return {
+          type: 'sync_to_overleaf_response',
+          project_id: this.projectId,
+          operation: 'update',
+          path: message.path,
+          success: true,
+          timestamp: Date.now()
+        };
+      } catch (error) {
+        console.error(`[APIHandler] ❌ WebSocket update failed:`, error);
+        throw error;
+      }
+    }
+
+    // Fallback to REST API (will likely fail with 403, but keep for reference)
+    console.warn(`[APIHandler] ⚠️ No WebSocket client, attempting REST API (may fail with 403)`);
 
     const response = await this.retryWithBackoff(
       async () => await fetch(
