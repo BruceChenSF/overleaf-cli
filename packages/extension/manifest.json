@@ -18,7 +18,7 @@
     {
       "matches": ["https://*.overleaf.com/project/*", "https://*.cn.overleaf.com/project/*"],
       "js": ["dist/content.js"],
-      "run_at": "document_start",
+      "run_at": "document_idle",
       "all_frames": false
     }
   ],
@@ -28,6 +28,10 @@
   "web_accessible_resources": [
     {
       "resources": ["dist/edit-monitor-bridge.js"],
+      "matches": ["https://*.overleaf.com/*", "https://*.cn.overleaf.com/*"]
+    },
+    {
+      "resources": ["public/libs/*", "public/terminal.html"],
       "matches": ["https://*.overleaf.com/*", "https://*.cn.overleaf.com/*"]
     }
   ],
