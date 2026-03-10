@@ -100,8 +100,8 @@ export class OverleafWebSocketClient {
       {
         headers: {
           'Accept': 'text/plain',
-          'Cookie': cookies,
-          ...(this.csrfToken && { 'X-Csrf-Token': this.csrfToken })
+          'Cookie': cookies
+          // Note: X-Csrf-Token header removed - it causes CORS preflight to fail
         },
       }
     );

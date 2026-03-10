@@ -55,6 +55,12 @@ export class TextFileSyncManager {
       return;
     }
 
+    // 🔧 IMPORTANT: Create marker file BEFORE applying ops to prevent circular sync
+    // This tells FileWatcher to ignore the upcoming file write
+    const { startFileSync, endFileSync } = require('../filesystem/watcher');
+    const syncId = startFileSync(this.projectConfig.projectId, this.projectConfig.localPath, docPath);
+    console.log(`[TextFileSync] 🔧 Created marker for ${docPath} (syncId: ${syncId})`);
+
     // Apply OT operations
     try {
       await this.applyOps(docPath, ops);
@@ -73,6 +79,11 @@ export class TextFileSyncManager {
       console.error(`[TextFileSync] ❌ Error applying ops to ${docPath}:`, error);
       // Don't try to re-sync via API - it doesn't work
       // The file will be corrected on next page refresh/sync
+    } finally {
+      // 🔧 IMPORTANT: Remove marker file AFTER applying ops
+      // This allows FileWatcher to detect user edits again
+      endFileSync(syncId);
+      console.log(`[TextFileSync] 🔧 Removed marker for ${docPath}`);
     }
   }
 

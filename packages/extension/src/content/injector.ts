@@ -179,11 +179,16 @@ async function requestInitialSync(): Promise<void> {
 
     console.log('[Mirror] 🔌 Connecting to Overleaf WebSocket...');
 
-    // Create and connect WebSocket client
+    // 🔧 Auto-detect domain from current page to avoid CORS issues
+    const currentDomain = window.location.hostname;
+    console.log('[Mirror] 🌐 Detected domain:', currentDomain);
+
+    // Create and connect WebSocket client with auto-detected domain
     overleafWsClient = new OverleafWebSocketClient(
       projectId,
       auth,
-      csrfToken
+      csrfToken,
+      currentDomain
     );
 
     await overleafWsClient.connect();

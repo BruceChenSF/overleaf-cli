@@ -31,11 +31,18 @@ export class ProjectConfigStore {
         localPath: defaultPath,
         createdAt: Date.now(),
         lastSyncAt: 0,
-        syncBinaryFiles: false
+        syncBinaryFiles: false,
+        enableFileSync: true  // 🔧 Default to true for new projects
       };
     }
 
-    return this.config.projects[projectId];
+    // 🔧 Fix: If enableFileSync is undefined (old config), default to true
+    const config = this.config.projects[projectId];
+    if (config.enableFileSync === undefined) {
+      config.enableFileSync = true;
+    }
+
+    return config;
   }
 
   /**

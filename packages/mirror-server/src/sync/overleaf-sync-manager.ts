@@ -110,17 +110,22 @@ export class OverleafSyncManager {
         );
       }
 
-      // Find docId
+      // Find docId from mapping
       const docId = this.pathToDocId.get(event.path);
 
-      // Determine operation type
+      // Determine operation type:
+      // - If FileChangeEvent says delete, use delete
+      // - If we have a docId in mapping, use update (file already exists on Overleaf)
+      // - Otherwise, use create (new file that needs to be created on Overleaf)
       let operation: 'update' | 'create' | 'delete';
       if (event.type === 'delete') {
         operation = 'delete';
       } else if (docId) {
         operation = 'update';
+        console.log(`[OverleafSyncManager] 📝 Found docId for ${event.path}: ${docId}, using UPDATE`);
       } else {
         operation = 'create';
+        console.log(`[OverleafSyncManager] ➕ No docId for ${event.path}, using CREATE`);
       }
 
       // Send message to extension

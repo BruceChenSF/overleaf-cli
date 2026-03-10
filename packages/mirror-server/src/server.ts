@@ -214,8 +214,18 @@ export class MirrorServer {
       case 'edit_event':
         console.log('[Server] Routing to edit_event handler');
 
+        // 🔧 Update docId mapping from edit_event
+        const editMessage = message as EditEventMessage;
+        if (editMessage.data && editMessage.data.doc_name && editMessage.data.doc_id) {
+          const syncManager = this.syncManagers.get(editMessage.project_id);
+          if (syncManager) {
+            syncManager.updateMapping(editMessage.data.doc_name, editMessage.data.doc_id);
+            console.log(`[Server] 📝 Updated docId mapping: ${editMessage.data.doc_name} -> ${editMessage.data.doc_id}`);
+          }
+        }
+
         handleEditMonitor(
-          message as EditEventMessage,
+          editMessage,
           this.configStore,
           (projectId: string) => {
             const cookies = this.projectCookies.get(projectId);
