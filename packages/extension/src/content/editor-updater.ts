@@ -4,24 +4,31 @@
  * This module updates Overleaf's CodeMirror 6 editor by directly
  * manipulating the DOM. Overleaf will auto-save the changes.
  *
- * IMPORTANT: Uses a distributed lock mechanism to prevent circular sync.
- * When we update the editor, we set a flag that EditMonitor checks
- * to ignore the resulting edit events.
+ * IMPORTANT: Uses a unique sync ID to mark our updates.
+ * EditMonitor checks this ID to distinguish between our updates and user edits.
  */
 
-const UPDATE_FLAG = '__overleaf_cc_editor_updating__';
-const UPDATE_TIMEOUT = 5000; // 5 seconds timeout for safety
+const SYNC_ID_KEY = '__overleaf_cc_sync_id__';
+const SYNC_TIMEOUT = 10000; // 10 seconds
+
+/**
+ * Generate a unique sync ID
+ */
+function generateSyncId(): string {
+  return `sync-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+}
 
 export class EditorUpdater {
   /**
    * Update document content in Overleaf editor
    *
-   * @param docId - Document ID to update (not used for CM6, but kept for API compatibility)
+   * @param docId - Document ID to update
    * @param content - New content for the document
-   * @returns Promise<void>
+   * @returns the sync ID
    */
-  async updateDocument(docId: string, content: string): Promise<void> {
-    console.log(`[EditorUpdater] 📝 Updating doc: ${docId}`);
+  updateDocument(docId: string, content: string): string {
+    const syncId = generateSyncId();
+    console.log(`[EditorUpdater] 📝 Updating doc: ${docId} (syncId: ${syncId})`);
 
     // Find the CodeMirror 6 content element
     const cmContent = document.querySelector('.cm-content');
@@ -32,66 +39,58 @@ export class EditorUpdater {
 
     console.log(`[EditorUpdater] ✅ Found .cm-content element`);
 
-    // 🔥 Set flag BEFORE updating to prevent EditMonitor from picking up this change
-    (window as any)[UPDATE_FLAG] = {
+    // 🔥 Set sync ID to mark this as our update
+    (window as any)[SYNC_ID_KEY] = {
+      syncId,
       docId,
-      timestamp: Date.now(),
-      content
+      timestamp: Date.now()
     };
-    console.log(`[EditorUpdater] 🔒 Set update flag to prevent circular sync`);
+    console.log(`[EditorUpdater] 🔒 Set sync ID: ${syncId}`);
 
-    try {
-      // Directly update the textContent
-      // CodeMirror 6 will detect the change via MutationObserver
-      // Overleaf will auto-save
-      (cmContent as HTMLElement).textContent = content;
+    // Directly update the textContent
+    (cmContent as HTMLElement).textContent = content;
+    console.log(`[EditorUpdater] ✅ Updated content (${content.length} chars)`);
 
-      console.log(`[EditorUpdater] ✅ Updated content (${content.length} chars)`);
+    // Auto-clear after timeout (in case no edit event comes)
+    setTimeout(() => {
+      const current = (window as any)[SYNC_ID_KEY];
+      if (current && current.syncId === syncId) {
+        console.log(`[EditorUpdater] ⏱️ Sync ID timeout, clearing: ${syncId}`);
+        delete (window as any)[SYNC_ID_KEY];
+      }
+    }, SYNC_TIMEOUT);
 
-      // Wait for a short delay to ensure the edit events have been processed
-      // This ensures our flag is still set when EditMonitor checks
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      // Now clear the flag
-      this.clearUpdateFlag();
-
-    } catch (error) {
-      // Clear flag on error
-      this.clearUpdateFlag();
-      throw error;
-    }
+    return syncId;
   }
 
   /**
-   * Clear the update flag
-   * @private
+   * Check if a sync ID is currently active (for EditMonitor to use)
    */
-  private clearUpdateFlag(): void {
-    delete (window as any)[UPDATE_FLAG];
-    console.log(`[EditorUpdater] 🔓 Cleared update flag`);
-  }
+  static getSyncId(): { syncId: string; docId: string; timestamp: number } | null {
+    const info = (window as any)[SYNC_ID_KEY];
 
-  /**
-   * Check if editor is being updated (for EditMonitor to use)
-   * @returns true if currently updating, false otherwise
-   */
-  static isUpdating(): boolean {
-    return !!(window as any)[UPDATE_FLAG];
-  }
-
-  /**
-   * Get current update info (for EditMonitor to use)
-   */
-  static getUpdateInfo(): { docId: string; timestamp: number; content: string } | null {
-    const info = (window as any)[UPDATE_FLAG];
-
-    // Check for stale flags (older than timeout)
-    if (info && Date.now() - info.timestamp > UPDATE_TIMEOUT) {
-      console.warn('[EditorUpdater] ⚠️ Found stale update flag, clearing');
-      delete (window as any)[UPDATE_FLAG];
+    if (!info) {
       return null;
     }
 
-    return info || null;
+    // Check for stale IDs
+    if (Date.now() - info.timestamp > SYNC_TIMEOUT) {
+      console.warn('[EditorUpdater] ⚠️ Found stale sync ID, clearing');
+      delete (window as any)[SYNC_ID_KEY];
+      return null;
+    }
+
+    return info;
+  }
+
+  /**
+   * Clear the sync ID (called by EditMonitor after processing our update)
+   */
+  static clearSyncId(syncId: string): void {
+    const current = (window as any)[SYNC_ID_KEY];
+    if (current && current.syncId === syncId) {
+      delete (window as any)[SYNC_ID_KEY];
+      console.log(`[EditorUpdater] 🔓 Cleared sync ID: ${syncId}`);
+    }
   }
 }

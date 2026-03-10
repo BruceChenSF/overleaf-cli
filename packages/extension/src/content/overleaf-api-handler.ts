@@ -103,12 +103,12 @@ export class OverleafAPIHandler {
       throw new Error('Content is required for update operation');
     }
 
-    // Use EditorUpdater to update document by simulating human editing
+    // Use EditorUpdater to update document
     console.log(`[APIHandler] 📝 Updating doc via EditorUpdater: ${message.path}`);
 
     try {
-      await this.editorUpdater.updateDocument(message.doc_id, message.content);
-      console.log(`[APIHandler] ✅ Updated via EditorUpdater: ${message.path}`);
+      const syncId = this.editorUpdater.updateDocument(message.doc_id, message.content);
+      console.log(`[APIHandler] ✅ Updated via EditorUpdater (syncId: ${syncId}): ${message.path}`);
 
       return {
         type: 'sync_to_overleaf_response',

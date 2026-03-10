@@ -64,29 +64,23 @@ export class EditMonitor {
   }
 
   /**
-   * 检查编辑器是否正在被更新（防止循环同步）
-   *
-   * @returns 更新信息或 null
-   * @private
+   * Get current sync ID (to check if edit is from our sync)
    */
-  private getEditorUpdateInfo(): { docId: string; timestamp: number; content: string } | null {
-    const UPDATE_FLAG = '__overleaf_cc_editor_updating__';
-    const UPDATE_TIMEOUT = 5000; // 5 seconds
+  private getSyncId(): { syncId: string; docId: string; timestamp: number } | null {
+    const SYNC_ID_KEY = '__overleaf_cc_sync_id__';
+    return (window as any)[SYNC_ID_KEY] || null;
+  }
 
-    const info = (window as any)[UPDATE_FLAG];
-
-    if (!info) {
-      return null;
+  /**
+   * Clear sync ID (after confirming our update was processed)
+   */
+  private clearSyncId(syncId: string): void {
+    const SYNC_ID_KEY = '__overleaf_cc_sync_id__';
+    const current = (window as any)[SYNC_ID_KEY];
+    if (current && current.syncId === syncId) {
+      delete (window as any)[SYNC_ID_KEY];
+      console.log(`[EditMonitor] 🔓 Cleared sync ID: ${syncId}`);
     }
-
-    // Check for stale flags
-    if (Date.now() - info.timestamp > UPDATE_TIMEOUT) {
-      console.warn('[EditMonitor] ⚠️ Found stale update flag, clearing');
-      delete (window as any)[UPDATE_FLAG];
-      return null;
-    }
-
-    return info;
   }
 
   /**
@@ -149,18 +143,24 @@ export class EditMonitor {
     try {
       const { doc_id, ops, version } = data;
 
+      console.log(`[EditMonitor] 🔍 Received edit event`);
+      console.log(`[EditMonitor] 🔍 doc_id: ${doc_id}, ops: ${ops?.length}, version: ${version}`);
+
       if (!ops || !Array.isArray(ops)) {
         console.warn('[EditMonitor] ⚠️ Invalid ops in event:', data);
         return;
       }
 
-      // 🔥 Check if editor is being updated by EditorUpdater (prevent circular sync)
-      const updateInfo = this.getEditorUpdateInfo();
-      if (updateInfo && updateInfo.docId === doc_id) {
-        console.log(`[EditMonitor] 🔇 Ignoring edit event (editor is being updated by us): ${doc_id}`);
-        console.log(`[EditMonitor] 🔇 Update was triggered ${Date.now() - updateInfo.timestamp}ms ago`);
+      // 🔥 Check if this edit is from our sync (using sync ID)
+      const syncInfo = this.getSyncId();
+      if (syncInfo && syncInfo.docId === doc_id) {
+        console.log(`[EditMonitor] 🔇 Ignoring edit event (from our sync, ID: ${syncInfo.syncId})`);
+        // Clear the sync ID now that we've confirmed our update was processed
+        this.clearSyncId(syncInfo.syncId);
         return;
       }
+
+      console.log(`[EditMonitor] ✅ Processing user edit (doc_id: ${doc_id})`);
 
       // 获取文档名称
       const docName = this.getDocName();
