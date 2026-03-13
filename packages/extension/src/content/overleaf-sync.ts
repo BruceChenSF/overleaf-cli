@@ -527,6 +527,13 @@ export class OverleafWebSocketClient {
   }
 
   /**
+   * Get the docIdToPath map (for EditorUpdater to use)
+   */
+  getDocIdToPathMap(): Map<string, DocInfo> {
+    return this.docIdToPath;
+  }
+
+  /**
    * Join a document to fetch its content
    */
   async joinDoc(docId: string): Promise<string[]> {

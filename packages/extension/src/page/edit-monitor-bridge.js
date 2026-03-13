@@ -59,6 +59,20 @@
         }, '*');
 
         console.log('[EditMonitorBridge] ✅ Edit event sent to content script');
+      } else if (payload.name === 'joinDoc' && payload.args) {
+        // 🔥 监听 joinDoc 事件 - 当用户点击文件切换文档时触发
+        const docId = payload.args[0];
+        console.log('[EditMonitorBridge] 📄 joinDoc captured:', docId);
+
+        // 通过 postMessage 发送给 Content Script
+        window.postMessage({
+          type: 'OVERLEAF_CC_JOIN_DOC',
+          data: {
+            doc_id: docId
+          }
+        }, '*');
+
+        console.log('[EditMonitorBridge] ✅ joinDoc event sent to content script');
       } else {
         console.log('[EditMonitorBridge] ⏭️ Skipped: Not an edit event (name:', payload.name, ')');
       }

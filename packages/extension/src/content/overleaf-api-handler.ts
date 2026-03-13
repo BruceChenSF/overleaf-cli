@@ -107,7 +107,10 @@ export class OverleafAPIHandler {
     console.log(`[APIHandler] 📝 Updating doc via EditorUpdater: ${message.path}`);
 
     try {
-      const syncId = this.editorUpdater.updateDocument(message.doc_id, message.content);
+      const syncId = await this.editorUpdater.updateDocument(
+        message.doc_id,
+        message.content
+      );
       console.log(`[APIHandler] ✅ Updated via EditorUpdater (syncId: ${syncId}): ${message.path}`);
 
       return {

@@ -229,6 +229,10 @@ async function requestInitialSync(): Promise<void> {
     await overleafWsClient.connect();
     console.log('[Mirror] ✅ Connected to Overleaf WebSocket');
 
+    // 🔥 Expose docIdToPath mapping globally for EditorUpdater to use
+    (window as any).__overleaf_docIdToPath__ = overleafWsClient.getDocIdToPathMap();
+    console.log('[Mirror] ✅ Exposed docIdToPath mapping to global');
+
     // Sync all files
     const syncedFiles = await overleafWsClient.syncAllFiles();
 
