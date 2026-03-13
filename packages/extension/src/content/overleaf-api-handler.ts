@@ -69,52 +69,27 @@ export class OverleafAPIHandler {
         console.log(`[APIHandler]    oldPath: ${message.oldPath}`);
       }
 
-      // 🔍 Only log for now, don't execute actual sync
-      console.log(`[APIHandler] 🔍 [TEST MODE] Would execute: ${message.operation.toUpperCase()} ${message.path}`);
+      let result: SyncToOverleafResponse;
 
       switch (message.operation) {
         case 'update':
-          console.log(`[APIHandler] 📝 [UPDATE] Would update doc ${message.doc_id} with ${message.content?.length || 0} chars`);
-          // TODO: Implement actual update
+          result = await this.updateDocument(message);
           break;
         case 'create':
-          console.log(`[APIHandler] ➕ [CREATE] Would create file: ${message.path}`);
-          console.log(`[APIHandler]    Content length: ${message.content?.length || 0}`);
-          console.log(`[APIHandler]    Would parse filename from path`);
-          console.log(`[APIHandler]    Would call POST /project/${this.projectId}/doc`);
-          // TODO: Implement actual create
+          result = await this.createDocument(message);
           break;
         case 'delete':
-          console.log(`[APIHandler] 🗑️ [DELETE] Would delete doc ${message.doc_id}`);
-          console.log(`[APIHandler]    Path: ${message.path}`);
-          console.log(`[APIHandler]    Would call DELETE /project/${this.projectId}/doc/${message.doc_id}`);
-          // TODO: Implement actual delete
+          result = await this.deleteDocument(message);
           break;
         case 'rename':
-          console.log(`[APIHandler] ✏️ [RENAME] Would rename file`);
-          console.log(`[APIHandler]    Old path: ${message.oldPath}`);
-          console.log(`[APIHandler]    New path: ${message.path}`);
-          console.log(`[APIHandler]    doc_id: ${message.doc_id}`);
-          console.log(`[APIHandler]    Would call PUT /api/project/${this.projectId}/doc/${message.doc_id}/rename`);
-          // TODO: Implement actual rename
+          result = await this.renameDocument(message);
           break;
         default:
-          console.error(`[APIHandler] ❌ Unknown operation: ${message.operation}`);
           throw new Error(`Unknown operation: ${message.operation}`);
       }
 
-      // Send success response (test mode)
-      this.mirrorClient.send({
-        type: 'sync_to_overleaf_response',
-        project_id: this.projectId,
-        operation: message.operation,
-        path: message.path,
-        oldPath: message.oldPath,
-        success: true,
-        timestamp: Date.now()
-      });
-
-      console.log(`[APIHandler] ✅ [TEST MODE] Sent success response for ${message.operation}`);
+      this.mirrorClient.send(result);
+      console.log(`[APIHandler] ✅ Sent success response for ${message.operation}`);
     } catch (error) {
       console.error(`[APIHandler] ❌ ${message.operation} failed:`, error);
 
@@ -251,5 +226,440 @@ export class OverleafAPIHandler {
       success: true,
       timestamp: Date.now()
     };
+  }
+
+  private async renameDocument(message: SyncToOverleafMessage): Promise<SyncToOverleafResponse> {
+    if (!message.doc_id) {
+      throw new Error('doc_id is required for rename operation');
+    }
+
+    if (!message.oldPath) {
+      throw new Error('oldPath is required for rename operation');
+    }
+
+    // Extract new file name from path
+    const pathParts = message.path.split('/');
+    const newFileName = pathParts.pop() || message.path;
+
+    console.log(`[APIHandler] ✏️ Renaming via DOM: ${message.oldPath} -> ${message.path} (${newFileName})`);
+
+    // Use DOM manipulation to rename the file
+    try {
+      await this.renameFileViaDOM(message.doc_id, newFileName);
+      console.log(`[APIHandler] ✅ Renamed: ${message.oldPath} -> ${message.path}`);
+
+      return {
+        type: 'sync_to_overleaf_response',
+        project_id: this.projectId,
+        operation: 'rename',
+        path: message.path,
+        oldPath: message.oldPath,
+        success: true,
+        doc_id: message.doc_id,
+        timestamp: Date.now()
+      };
+    } catch (error) {
+      console.error(`[APIHandler] ❌ Rename via DOM failed:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Rename a file by simulating user interaction with the file tree UI
+   *
+   * Steps:
+   * 1. Find the file in the file tree (by docId or filename)
+   * 2. Click the file to select it (so it becomes .selected)
+   * 3. Click the menu button to open the context menu
+   * 4. Click the "Rename" menu item (first item in dropdown)
+   * 5. Find the rename input span
+   * 6. Clear the input and type the new filename
+   * 7. Press Enter to confirm
+   */
+  private async renameFileViaDOM(docId: string, newFileName: string): Promise<void> {
+    console.log(`[APIHandler] 🔍 Looking for file in tree: ${docId}`);
+
+    // Step 1: Find the file element
+    let fileElement: Element | null = null;
+
+    // Try to find by data-entity-id first
+    fileElement = document.querySelector(`[data-entity-id="${docId}"]`);
+
+    // Fallback: find by filename using global mapping
+    if (!fileElement) {
+      console.log(`[APIHandler] ⚠️ Could not find by data-entity-id, trying filename...`);
+
+      // Get file info from global mapping
+      const docInfo = (window as any).__overleaf_docIdToPath__?.get(docId);
+      if (!docInfo) {
+        throw new Error(`Could not find file info for doc ${docId}`);
+      }
+
+      const oldPath = docInfo.path;
+      const oldFileName = oldPath.split('/').pop() || oldPath;
+
+      console.log(`[APIHandler] 🔍 Looking for file: ${oldFileName} (path: ${oldPath})`);
+
+      // Find all file name spans in the tree
+      const nameSpans = document.querySelectorAll('#ide-redesign-file-tree .item-name span');
+
+      for (const span of nameSpans) {
+        if (span.textContent?.trim() === oldFileName) {
+          // Found a matching filename, now check if it's the right one by looking at the path
+          // Walk up the tree to find the file entity
+          const fileDetails = span.closest('.file-tree-entity-details');
+          if (fileDetails) {
+            const li = fileDetails.closest('li');
+            if (li) {
+              fileElement = li;
+              console.log(`[APIHandler] ✅ Found file element by filename: ${oldFileName}`);
+              break;
+            }
+          }
+        }
+      }
+    } else {
+      console.log(`[APIHandler] ✅ Found file element by data-entity-id`);
+    }
+
+    if (!fileElement) {
+      throw new Error(`Could not find file element for doc ${docId}`);
+    }
+
+    // Find the clickable element (file-tree-entity-details)
+    const fileDetails = fileElement.querySelector('.file-tree-entity-details');
+    if (!fileDetails) {
+      throw new Error('Could not find file tree entity details');
+    }
+
+    // Step 2: Click the file to select it (so it becomes .selected)
+    console.log(`[APIHandler] 🔍 Clicking file to select it...`);
+    (fileDetails as HTMLElement).click();
+    await this.sleep(300); // Wait for selection to take effect
+
+    // Step 3: Find and click the menu button
+    // Use the path: fileElement > div > div > .menu-button
+    const menuButton = fileElement.querySelector('.menu-button .entity-menu-toggle');
+    if (!menuButton) {
+      throw new Error('Could not find menu button');
+    }
+
+    console.log(`[APIHandler] ✅ Found menu button, clicking...`);
+    (menuButton as HTMLElement).click();
+    await this.sleep(500); // Wait for dropdown to appear
+
+    // Step 4: Find and click the "Rename" menu item (first item in the dropdown)
+    console.log(`[APIHandler] 🔍 Looking for Rename menu item...`);
+
+    let renameClicked = false;
+    let renameMenuItem: HTMLElement | null = null;
+
+    // Find the <li> element
+    const renameLi = document.querySelector('#dropdown-file-tree-context-menu > li:nth-child(1)');
+
+    if (renameLi) {
+      // Find the <a> tag inside the <li>
+      const renameLink = renameLi.querySelector('a.dropdown-item');
+      if (renameLink) {
+        console.log(`[APIHandler] ✅ Found Rename menu item <a>, clicking...`);
+        renameMenuItem = renameLink as HTMLElement;
+      }
+    }
+
+    if (!renameMenuItem) {
+      console.log(`[APIHandler] ⚠️ Could not find Rename <a> by :nth-child(1), trying text search...`);
+      // Fallback: try to find by text content
+      const allItems = document.querySelectorAll('#dropdown-file-tree-context-menu li');
+      for (const item of allItems) {
+        const link = item.querySelector('a.dropdown-item');
+        if (!link) continue;
+
+        const text = link.textContent?.trim().toLowerCase();
+        console.log(`[APIHandler] 🔍 Checking menu item: "${text}"`);
+        if (text === 'rename' || text === 'rename...') {
+          console.log(`[APIHandler] ✅ Found Rename menu item by text, clicking...`);
+          renameMenuItem = link as HTMLElement;
+          break;
+        }
+      }
+    }
+
+    if (!renameMenuItem) {
+      throw new Error('Could not find Rename menu item');
+    }
+
+    console.log(`[APIHandler] 🖱️ Simulating click on element: ${renameMenuItem.tagName}`);
+    this.simulateClick(renameMenuItem);
+    renameClicked = true;
+
+    // Wait for the rename input to appear (UI transition)
+    console.log(`[APIHandler] ⏳ Waiting for rename input to appear...`);
+    await this.sleep(1500);
+
+    // Step 5: Find the rename input span within the file element
+    console.log(`[APIHandler] 🔍 Looking for rename input...`);
+
+    // Look for the input within the same file element we clicked
+    let renameInput: HTMLElement | null = null;
+
+    // Try exact match first
+    renameInput = fileElement.querySelector('.item-name span.rename-input');
+
+    if (!renameInput) {
+      // Debug: log what we can find
+      console.log(`[APIHandler] 🔍 Debug: looking for any .item-name span in file element...`);
+      const allSpans = fileElement.querySelectorAll('.item-name span');
+      console.log(`[APIHandler] 🔍 Debug: found ${allSpans.length} .item-name spans`);
+
+      // Try to find any span that might be the rename input
+      for (const span of allSpans) {
+        const className = (span as HTMLElement).className;
+        const text = span.textContent;
+        console.log(`[APIHandler] 🔍 Debug: span with class="${className}", text="${text}"`);
+
+        // Check if this span might be the rename input (even if class is empty but text exists)
+        if (className.includes('rename') || className.includes('input') ||
+            (span as HTMLElement).tagName === 'INPUT' ||
+            (className === '' && text && text.length > 0)) {
+          renameInput = span as HTMLElement;
+          console.log(`[APIHandler] ✅ Found potential input element`);
+          break;
+        }
+      }
+    }
+
+    if (!renameInput) {
+      // Last resort: look for any input in the file tree
+      console.log(`[APIHandler] 🔍 Still not found, trying to find any rename-input in file tree...`);
+      const allRenameInputs = document.querySelectorAll('.rename-input');
+      console.log(`[APIHandler] 🔍 Debug: found ${allRenameInputs.length} .rename-input elements in tree`);
+
+      for (const input of allRenameInputs) {
+        if (input.offsetParent !== null) { // Check if visible
+          renameInput = input as HTMLElement;
+          console.log(`[APIHandler] 🔍 Found visible rename-input`);
+          break;
+        }
+      }
+    }
+
+    if (!renameInput) {
+      // Debug: Check if the file element is still selected
+      const li = fileElement.closest('li');
+      if (li) {
+        console.log(`[APIHandler] 🔍 Debug: file element li classes: ${li.className}`);
+      }
+
+      // Check if there's an input element anywhere in the file tree
+      const allInputs = document.querySelectorAll('#ide-redesign-file-tree input');
+      console.log(`[APIHandler] 🔍 Debug: found ${allInputs.length} input elements in file tree`);
+
+      throw new Error('Could not find rename input span');
+    }
+
+    console.log(`[APIHandler] ✅ Found rename input span, looking for actual input element...`);
+
+    // CRITICAL: Look for the actual INPUT element inside the rename-input span
+    let actualInput: HTMLElement | null = null;
+
+    // Try to find input inside the rename-input span
+    const inputInsideSpan = renameInput.querySelector('input');
+    if (inputInsideSpan) {
+      actualInput = inputInsideSpan as HTMLElement;
+      console.log(`[APIHandler] ✅ Found input element inside rename-input span`);
+    } else {
+      // Check if the span itself is an input (has contentEditable or is INPUT tag)
+      const tagName = (renameInput as HTMLElement).tagName;
+      const contentEditable = (renameInput as HTMLElement).getAttribute('contenteditable');
+      console.log(`[APIHandler] 🔍 rename-input tag: ${tagName}, contentEditable: ${contentEditable}`);
+
+      if (tagName === 'INPUT') {
+        actualInput = renameInput;
+        console.log(`[APIHandler] ✅ rename-input itself is an INPUT element`);
+      } else if (contentEditable === 'true' || contentEditable === '') {
+        actualInput = renameInput;
+        console.log(`[APIHandler] ✅ rename-input is contentEditable`);
+      } else {
+        // Last resort: assume the span is what we need to work with
+        actualInput = renameInput;
+        console.log(`[APIHandler] ⚠️ No input found, using rename-input span directly`);
+      }
+    }
+
+    // Step 6: Set focus on the actual input element using multiple methods
+    console.log(`[APIHandler] 🔍 Setting focus on actual input element (${actualInput.tagName})...`);
+
+    // CRITICAL: First blur the current active element (likely CodeMirror editor)
+    const currentActiveElement = document.activeElement;
+    if (currentActiveElement && currentActiveElement !== actualInput) {
+      console.log(`[APIHandler] 🔍 Blurring current active element: ${currentActiveElement.tagName}`, currentActiveElement.className);
+      (currentActiveElement as HTMLElement).blur();
+      await this.sleep(50);
+    }
+
+    // Method 1: Try click first to activate
+    actualInput.click();
+    await this.sleep(50);
+
+    // Method 2: Then set focus
+    actualInput.focus();
+    await this.sleep(50);
+
+    // Verify focus is on the right element
+    const activeElement = document.activeElement;
+    console.log(`[APIHandler] 🔍 Active element: ${activeElement?.tagName}`, activeElement?.className);
+    console.log(`[APIHandler] 🔍 Is actual input focused? ${activeElement === actualInput}`);
+
+    // If still not focused, try clicking on the file tree header or another non-editable area
+    if (activeElement !== actualInput) {
+      console.log(`[APIHandler] ⚠️ Focus not on actual input, trying alternative approach...`);
+
+      // Click on the file tree container (not an editable element)
+      const fileTree = document.querySelector('#ide-redesign-file-tree');
+      if (fileTree) {
+        console.log(`[APIHandler] 🔍 Clicking file tree to move focus away from editor...`);
+        (fileTree as HTMLElement).click();
+        await this.sleep(50);
+      }
+
+      // Now try focus again
+      actualInput.focus();
+      await this.sleep(50);
+
+      console.log(`[APIHandler] 🔍 Active element after file tree click: ${document.activeElement?.tagName}`, document.activeElement?.className);
+    }
+
+    // Clear existing content and set new filename
+    if (actualInput.tagName === 'INPUT') {
+      // For INPUT elements, use .value
+      console.log(`[APIHandler] 🔍 Setting .value on INPUT element`);
+      (actualInput as HTMLInputElement).value = newFileName;
+    } else {
+      // For contentEditable elements, use textContent
+      console.log(`[APIHandler] 🔍 Setting .textContent on non-INPUT element`);
+      actualInput.textContent = newFileName;
+    }
+
+    // Trigger input event to ensure React/Overleaf picks up the change
+    const inputEvent = new Event('input', { bubbles: true });
+    actualInput.dispatchEvent(inputEvent);
+
+    // Trigger change event
+    const changeEvent = new Event('change', { bubbles: true });
+    actualInput.dispatchEvent(changeEvent);
+
+    // Step 7: Press Enter to confirm and save
+    console.log(`[APIHandler] 🔍 Pressing Enter to confirm and save...`);
+
+    // Verify focus one more time before sending Enter
+    const activeElementBeforeEnter = document.activeElement;
+    console.log(`[APIHandler] 🔍 Active element before Enter: ${activeElementBeforeEnter?.tagName}`, activeElementBeforeEnter?.className);
+    console.log(`[APIHandler] 🔍 Is still focused on actual input? ${activeElementBeforeEnter === actualInput}`);
+
+    // Only send Enter if focus is on actual input
+    if (activeElementBeforeEnter === actualInput) {
+      console.log(`[APIHandler] ✅ Focus is correct, sending Enter events...`);
+
+      // keydown
+      const keydownEvent = new KeyboardEvent('keydown', {
+        key: 'Enter',
+        code: 'Enter',
+        keyCode: 13,
+        which: 13,
+        bubbles: true,
+        cancelable: true
+      });
+      actualInput.dispatchEvent(keydownEvent);
+
+      // keypress
+      const keypressEvent = new KeyboardEvent('keypress', {
+        key: 'Enter',
+        code: 'Enter',
+        keyCode: 13,
+        which: 13,
+        bubbles: true,
+        cancelable: true
+      });
+      actualInput.dispatchEvent(keypressEvent);
+
+      // keyup
+      const keyupEvent = new KeyboardEvent('keyup', {
+        key: 'Enter',
+        code: 'Enter',
+        keyCode: 13,
+        which: 13,
+        bubbles: true,
+        cancelable: true
+      });
+      actualInput.dispatchEvent(keyupEvent);
+    } else {
+      console.log(`[APIHandler] ⚠️ Focus is NOT on actual input, cannot send Enter safely`);
+      console.log(`[APIHandler] ⚠️ Trying alternative: dispatch Enter directly on actual input anyway...`);
+
+      // Try anyway - might still work if React handles event propagation
+      const keydownEvent = new KeyboardEvent('keydown', {
+        key: 'Enter',
+        code: 'Enter',
+        keyCode: 13,
+        which: 13,
+        bubbles: true,
+        cancelable: true
+      });
+      actualInput.dispatchEvent(keydownEvent);
+
+      const keyupEvent = new KeyboardEvent('keyup', {
+        key: 'Enter',
+        code: 'Enter',
+        keyCode: 13,
+        which: 13,
+        bubbles: true,
+        cancelable: true
+      });
+      actualInput.dispatchEvent(keyupEvent);
+    }
+
+    // Blur the input to trigger form submission
+    console.log(`[APIHandler] 🔍 Blurring input to trigger save...`);
+    actualInput.blur();
+
+    // Wait for the rename to complete and sync to cloud
+    console.log(`[APIHandler] ⏳ Waiting for rename to complete...`);
+    await this.sleep(1500);
+
+    console.log(`[APIHandler] ✅ Rename completed`);
+  }
+
+  /**
+   * Sleep utility
+   */
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Simulate a realistic mouse click event
+   * This helps trigger React event handlers that might not respond to simple click()
+   */
+  private simulateClick(element: HTMLElement): void {
+    console.log(`[APIHandler] 🖱️ Simulating click on element:`, element.tagName, element.className);
+
+    // Create and dispatch mouse events
+    const eventOptions = {
+      bubbles: true,
+      cancelable: true,
+      view: window
+    };
+
+    // Mousedown
+    const mouseDownEvent = new MouseEvent('mousedown', eventOptions);
+    element.dispatchEvent(mouseDownEvent);
+
+    // Mouseup
+    const mouseUpEvent = new MouseEvent('mouseup', eventOptions);
+    element.dispatchEvent(mouseUpEvent);
+
+    // Click
+    const clickEvent = new MouseEvent('click', eventOptions);
+    element.dispatchEvent(clickEvent);
   }
 }

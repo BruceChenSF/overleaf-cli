@@ -35,6 +35,14 @@ export class OverleafSyncManager {
   private projectId: string;
   private wsClient: WebSocket | null = null;
 
+  /**
+   * Normalize path to use forward slashes (Overleaf format)
+   * This ensures consistent path matching across different operating systems
+   */
+  private normalizePath(path: string): string {
+    return path.replace(/\\/g, '/');
+  }
+
   constructor(projectId: string, wsPort: number = 3456) {
     this.projectId = projectId;
     this.projectPath = join(homedir(), 'overleaf-mirror', projectId);
@@ -102,6 +110,15 @@ export class OverleafSyncManager {
     try {
       console.log(`[OverleafSyncManager] Syncing to Overleaf: ${event.type} ${event.path}`);
 
+      // 🔧 Normalize path to forward slashes for consistent matching
+      const normalizedPath = this.normalizePath(event.path);
+      const normalizedOldPath = event.oldPath ? this.normalizePath(event.oldPath) : undefined;
+
+      console.log(`[OverleafSyncManager] 🔍 Normalized path: ${normalizedPath}`);
+      if (normalizedOldPath) {
+        console.log(`[OverleafSyncManager] 🔍 Normalized oldPath: ${normalizedOldPath}`);
+      }
+
       let content: string | undefined;
 
       // Only read content for create and update operations
@@ -112,13 +129,13 @@ export class OverleafSyncManager {
         );
       }
 
-      // Find docId from mapping
-      const docId = this.pathToDocId.get(event.path);
+      // Find docId from mapping (using normalized path)
+      const docId = this.pathToDocId.get(normalizedPath);
 
-      // For rename, find docId from old path
+      // For rename, find docId from old path (using normalized path)
       let renameDocId: string | undefined;
-      if (event.type === 'rename' && event.oldPath) {
-        renameDocId = this.pathToDocId.get(event.oldPath);
+      if (event.type === 'rename' && normalizedOldPath) {
+        renameDocId = this.pathToDocId.get(normalizedOldPath);
       }
 
       // Determine operation type:
@@ -131,18 +148,18 @@ export class OverleafSyncManager {
         operation = 'delete';
       } else if (event.type === 'rename') {
         operation = 'rename';
-        console.log(`[OverleafSyncManager] 📝 File renamed: ${event.oldPath} -> ${event.path}`);
+        console.log(`[OverleafSyncManager] 📝 File renamed: ${normalizedOldPath} -> ${normalizedPath}`);
         if (renameDocId) {
-          console.log(`[OverleafSyncManager] 📝 Found docId for ${event.oldPath}: ${renameDocId}, using RENAME`);
+          console.log(`[OverleafSyncManager] 📝 Found docId for ${normalizedOldPath}: ${renameDocId}, using RENAME`);
         } else {
-          console.log(`[OverleafSyncManager] ⚠️ No docId for ${event.oldPath}, rename may fail`);
+          console.log(`[OverleafSyncManager] ⚠️ No docId for ${normalizedOldPath}, rename may fail`);
         }
       } else if (docId) {
         operation = 'update';
-        console.log(`[OverleafSyncManager] 📝 Found docId for ${event.path}: ${docId}, using UPDATE`);
+        console.log(`[OverleafSyncManager] 📝 Found docId for ${normalizedPath}: ${docId}, using UPDATE`);
       } else {
         operation = 'create';
-        console.log(`[OverleafSyncManager] ➕ No docId for ${event.path}, using CREATE`);
+        console.log(`[OverleafSyncManager] ➕ No docId for ${normalizedPath}, using CREATE`);
       }
 
       // Send message to extension
@@ -150,8 +167,8 @@ export class OverleafSyncManager {
         type: 'sync_to_overleaf',
         project_id: this.projectId,
         operation,
-        path: event.path,
-        oldPath: event.oldPath,
+        path: normalizedPath,  // Send normalized path
+        oldPath: normalizedOldPath,
         content,
         doc_id: (operation === 'update' || operation === 'delete') ? docId : renameDocId,
         timestamp: Date.now()
@@ -159,7 +176,7 @@ export class OverleafSyncManager {
 
       if (this.wsClient && this.wsClient.readyState === WebSocket.OPEN) {
         this.wsClient.send(JSON.stringify(message));
-        console.log(`[OverleafSyncManager] ✅ Sent sync request: ${operation} ${event.path}`);
+        console.log(`[OverleafSyncManager] ✅ Sent sync request: ${operation} ${normalizedPath}`);
       } else {
         console.warn('[OverleafSyncManager] ⚠️ WebSocket not connected');
       }
@@ -220,7 +237,8 @@ export class OverleafSyncManager {
   }
 
   updateMapping(path: string, docId: string): void {
-    this.pathToDocId.set(path, docId);
-    console.log(`[OverleafSyncManager] ✅ Updated mapping: ${path} → ${docId}`);
+    const normalizedPath = this.normalizePath(path);
+    this.pathToDocId.set(normalizedPath, docId);
+    console.log(`[OverleafSyncManager] ✅ Updated mapping: ${normalizedPath} → ${docId}`);
   }
 }
