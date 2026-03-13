@@ -5,8 +5,9 @@ import { EditorUpdater } from './editor-updater';
 interface SyncToOverleafMessage {
   type: 'sync_to_overleaf';
   project_id: string;
-  operation: 'update' | 'create' | 'delete';
+  operation: 'update' | 'create' | 'delete' | 'rename';
   path: string;
+  oldPath?: string;
   content?: string;
   doc_id?: string;
   timestamp: number;
@@ -15,8 +16,9 @@ interface SyncToOverleafMessage {
 interface SyncToOverleafResponse {
   type: 'sync_to_overleaf_response';
   project_id: string;
-  operation: 'update' | 'create' | 'delete';
+  operation: 'update' | 'create' | 'delete' | 'rename';
   path: string;
+  oldPath?: string;
   success: boolean;
   error?: string;
   doc_id?: string;
@@ -60,25 +62,59 @@ export class OverleafAPIHandler {
 
   async handleSyncRequest(message: SyncToOverleafMessage): Promise<void> {
     try {
-      console.log(`[APIHandler] ${message.operation} ${message.path}`);
+      console.log(`[APIHandler] 📢 Received sync request: ${message.operation} ${message.path}`);
+      console.log(`[APIHandler]    doc_id: ${message.doc_id || '(none)'}`);
+      console.log(`[APIHandler]    content length: ${message.content?.length || 0}`);
+      if (message.oldPath) {
+        console.log(`[APIHandler]    oldPath: ${message.oldPath}`);
+      }
 
-      let result: SyncToOverleafResponse;
+      // 🔍 Only log for now, don't execute actual sync
+      console.log(`[APIHandler] 🔍 [TEST MODE] Would execute: ${message.operation.toUpperCase()} ${message.path}`);
 
       switch (message.operation) {
         case 'update':
-          result = await this.updateDocument(message);
+          console.log(`[APIHandler] 📝 [UPDATE] Would update doc ${message.doc_id} with ${message.content?.length || 0} chars`);
+          // TODO: Implement actual update
           break;
         case 'create':
-          result = await this.createDocument(message);
+          console.log(`[APIHandler] ➕ [CREATE] Would create file: ${message.path}`);
+          console.log(`[APIHandler]    Content length: ${message.content?.length || 0}`);
+          console.log(`[APIHandler]    Would parse filename from path`);
+          console.log(`[APIHandler]    Would call POST /project/${this.projectId}/doc`);
+          // TODO: Implement actual create
           break;
         case 'delete':
-          result = await this.deleteDocument(message);
+          console.log(`[APIHandler] 🗑️ [DELETE] Would delete doc ${message.doc_id}`);
+          console.log(`[APIHandler]    Path: ${message.path}`);
+          console.log(`[APIHandler]    Would call DELETE /project/${this.projectId}/doc/${message.doc_id}`);
+          // TODO: Implement actual delete
+          break;
+        case 'rename':
+          console.log(`[APIHandler] ✏️ [RENAME] Would rename file`);
+          console.log(`[APIHandler]    Old path: ${message.oldPath}`);
+          console.log(`[APIHandler]    New path: ${message.path}`);
+          console.log(`[APIHandler]    doc_id: ${message.doc_id}`);
+          console.log(`[APIHandler]    Would call PUT /api/project/${this.projectId}/doc/${message.doc_id}/rename`);
+          // TODO: Implement actual rename
           break;
         default:
+          console.error(`[APIHandler] ❌ Unknown operation: ${message.operation}`);
           throw new Error(`Unknown operation: ${message.operation}`);
       }
 
-      this.mirrorClient.send(result);
+      // Send success response (test mode)
+      this.mirrorClient.send({
+        type: 'sync_to_overleaf_response',
+        project_id: this.projectId,
+        operation: message.operation,
+        path: message.path,
+        oldPath: message.oldPath,
+        success: true,
+        timestamp: Date.now()
+      });
+
+      console.log(`[APIHandler] ✅ [TEST MODE] Sent success response for ${message.operation}`);
     } catch (error) {
       console.error(`[APIHandler] ❌ ${message.operation} failed:`, error);
 
@@ -87,6 +123,7 @@ export class OverleafAPIHandler {
         project_id: this.projectId,
         operation: message.operation,
         path: message.path,
+        oldPath: message.oldPath,
         success: false,
         error: error instanceof Error ? error.message : String(error),
         timestamp: Date.now()

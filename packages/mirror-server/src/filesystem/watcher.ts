@@ -1,14 +1,28 @@
 import chokidar from 'chokidar';
 import { join } from 'path';
 import { homedir } from 'os';
-import { existsSync, unlinkSync } from 'fs';
+import { existsSync, unlinkSync, statSync, readdirSync, stat } from 'fs';
+import { promisify } from 'util';
+
+const statAsync = promisify(stat);
+const readdirAsync = promisify(readdirSync);
 
 interface FileChangeEvent {
-  type: 'create' | 'update' | 'delete';
+  type: 'create' | 'update' | 'delete' | 'rename';
   path: string;  // Relative to project directory path
+  oldPath?: string;  // For rename operations
 }
 
 type ChangeEventHandler = (event: FileChangeEvent) => void;
+
+/**
+ * Pending delete event for rename detection
+ */
+interface PendingDelete {
+  path: string;
+  timestamp: number;
+  size?: number;
+}
 
 /**
  * File watcher for monitoring local file changes
@@ -18,6 +32,9 @@ export class FileWatcher {
   private watcher: chokidar.FSWatcher | null = null;
   private onChangeCallback?: ChangeEventHandler;
   private projectDir: string;
+  private pendingDeletes = new Map<string, PendingDelete>();
+  private readonly RENAME_DETECTION_WINDOW = 3000; // 3 second window to detect renames (increased for Windows)
+  private fileSizes = new Map<string, number>(); // Track file sizes for rename detection
 
   constructor(
     private projectId: string,
@@ -48,6 +65,13 @@ export class FileWatcher {
       .on('add', (path) => {
         const relativePath = this.extractRelativePath(path);
 
+        // 🔧 IMPORTANT: Always update file size, even for server syncs
+        // This ensures rename detection works correctly
+        const stats = this.safeGetStats(path);
+        if (stats) {
+          this.fileSizes.set(relativePath, stats.size);
+        }
+
         // Check if this file is being synced by the server (marker file exists)
         const syncId = isFileBeingSynced(this.projectDir, relativePath);
 
@@ -60,7 +84,51 @@ export class FileWatcher {
           return;
         }
 
-        console.log(`[FileWatcher] ➕ File added: ${relativePath}`);
+        // 🔍 Debug: Log pending deletes
+        console.log(`[FileWatcher] 🔍 Checking for rename detection...`);
+        console.log(`[FileWatcher] 🔍 Current file: ${relativePath}, size: ${stats?.size || 'unknown'}`);
+        console.log(`[FileWatcher] 🔍 Pending deletes count: ${this.pendingDeletes.size}`);
+
+        // Check if this might be a rename (recently deleted file with same size)
+        const now = Date.now();
+
+        for (const [deletedPath, pendingDelete] of this.pendingDeletes.entries()) {
+          const timeDiff = now - pendingDelete.timestamp;
+          console.log(`[FileWatcher] 🔍 Comparing with: ${deletedPath}, size: ${pendingDelete.size}, timeDiff: ${timeDiff}ms`);
+
+          // Check if deletion happened recently and files have similar sizes
+          if (timeDiff <= this.RENAME_DETECTION_WINDOW &&
+              pendingDelete.size === stats?.size) {
+            // This is likely a rename!
+            console.log(`[FileWatcher] 📝 Detected rename: ${deletedPath} -> ${relativePath} (${timeDiff}ms, size: ${stats?.size})`);
+
+            // Remove from pending deletes
+            this.pendingDeletes.delete(deletedPath);
+            // Remove from file sizes tracking
+            this.fileSizes.delete(deletedPath);
+
+            // Trigger rename event
+            this.onChangeCallback?.({
+              type: 'rename',
+              path: relativePath,
+              oldPath: deletedPath
+            });
+
+            return;
+          } else {
+            console.log(`[FileWatcher] 🔍 No match: timeDiff=${timeDiff}ms (limit: ${this.RENAME_DETECTION_WINDOW}ms), size match=${pendingDelete.size === stats?.size}`);
+          }
+        }
+
+        // Clean up old pending deletes (older than RENAME_DETECTION_WINDOW)
+        for (const [deletedPath, pendingDelete] of this.pendingDeletes.entries()) {
+          if (now - pendingDelete.timestamp > this.RENAME_DETECTION_WINDOW) {
+            this.pendingDeletes.delete(deletedPath);
+            this.fileSizes.delete(deletedPath);
+          }
+        }
+
+        console.log(`[FileWatcher] ➕ File added: ${relativePath} (size: ${stats?.size || 0})`);
         this.onChangeCallback?.({
           type: 'create',
           path: relativePath
@@ -68,6 +136,14 @@ export class FileWatcher {
       })
       .on('change', (path) => {
         const relativePath = this.extractRelativePath(path);
+
+        // 🔧 IMPORTANT: Always update file size, even for server syncs
+        // This ensures rename detection works correctly after file edits
+        const stats = this.safeGetStats(path);
+        if (stats) {
+          this.fileSizes.set(relativePath, stats.size);
+          console.log(`[FileWatcher] 📏 Updated file size: ${relativePath} (${stats.size} bytes)`);
+        }
 
         // Check if this file is being synced by the server (marker file exists)
         // This now returns the syncId if being synced, null otherwise
@@ -103,17 +179,39 @@ export class FileWatcher {
           return;
         }
 
-        console.log(`[FileWatcher] 🗑️ File deleted: ${relativePath}`);
-        this.onChangeCallback?.({
-          type: 'delete',
-          path: relativePath
+        // Get file size from tracking map (before it's deleted)
+        const fileSize = this.fileSizes.get(relativePath);
+
+        console.log(`[FileWatcher] 🔍 File removed, storing for rename detection: ${relativePath} (size: ${fileSize || 'unknown'})`);
+
+        // Store in pending deletes for rename detection
+        this.pendingDeletes.set(relativePath, {
+          path: relativePath,
+          timestamp: Date.now(),
+          size: fileSize
         });
+
+        // Set a timeout to trigger delete event if not matched with an add
+        setTimeout(() => {
+          if (this.pendingDeletes.has(relativePath)) {
+            console.log(`[FileWatcher] 🗑️ File deleted (timeout, no rename detected): ${relativePath}`);
+            this.pendingDeletes.delete(relativePath);
+            this.fileSizes.delete(relativePath);
+            this.onChangeCallback?.({
+              type: 'delete',
+              path: relativePath
+            });
+          }
+        }, this.RENAME_DETECTION_WINDOW + 500); // Add 500ms buffer (was 100ms)
       })
       .on('error', (error) => {
         console.error(`[FileWatcher] ❌ Watcher error: ${error}`);
       })
-      .on('ready', () => {
+      .on('ready', async () => {
         console.log(`[FileWatcher] ✅ Watcher ready - monitoring directory`);
+
+        // 🔧 Initialize file sizes for all existing files
+        await this.initializeFileSizes();
       });
 
     console.log(`[FileWatcher] ✅ Event listeners registered`);
@@ -145,6 +243,70 @@ export class FileWatcher {
     return fullPath
       .replace(this.projectDir, '')
       .replace(/^[\/\\]+/, '');  // Handle both forward slashes and Windows backslashes
+  }
+
+  /**
+   * Safely get file stats (returns null if file doesn't exist)
+   */
+  private safeGetStats(path: string): { size: number } | null {
+    try {
+      const stats = statSync(path);
+      return { size: stats.size };
+    } catch (error) {
+      return null;
+    }
+  }
+
+  /**
+   * Initialize file sizes for all existing files in the project directory
+   * This ensures we have size information for files that existed before watcher started
+   */
+  private async initializeFileSizes(): Promise<void> {
+    console.log(`[FileWatcher] 🔍 Initializing file sizes for existing files...`);
+
+    try {
+      await this.scanDirectory(this.projectDir);
+      console.log(`[FileWatcher] ✅ Initialized ${this.fileSizes.size} file sizes`);
+    } catch (error) {
+      console.error(`[FileWatcher] ❌ Error initializing file sizes:`, error);
+    }
+  }
+
+  /**
+   * Recursively scan directory and record file sizes
+   */
+  private async scanDirectory(dirPath: string): Promise<void> {
+    try {
+      const entries = readdirSync(dirPath);
+
+      for (const entryName of entries) {
+        const fullPath = join(dirPath, entryName);
+
+        // Skip dotfiles and marker files
+        if (entryName.startsWith('.')) {
+          continue;
+        }
+
+        try {
+          const stats = await statAsync(fullPath);
+
+          if (stats.isDirectory()) {
+            // Recursively scan subdirectory
+            await this.scanDirectory(fullPath);
+          } else if (stats.isFile()) {
+            // Record file size
+            const relativePath = this.extractRelativePath(fullPath);
+            this.fileSizes.set(relativePath, stats.size);
+            console.log(`[FileWatcher] 📝 Recorded size: ${relativePath} (${stats.size} bytes)`);
+          }
+        } catch (error) {
+          // Skip files that can't be accessed (e.g., symlinks, permissions)
+          console.warn(`[FileWatcher] ⚠️ Skipping ${fullPath}:`, error);
+        }
+      }
+    } catch (error) {
+      console.error(`[FileWatcher] ❌ Error scanning directory ${dirPath}:`, error);
+    }
   }
 }
 

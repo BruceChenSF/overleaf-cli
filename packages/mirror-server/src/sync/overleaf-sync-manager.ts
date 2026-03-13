@@ -8,8 +8,9 @@ import type { FileChangeEvent } from '../filesystem/watcher';
 interface SyncToOverleafMessage {
   type: 'sync_to_overleaf';
   project_id: string;
-  operation: 'update' | 'create' | 'delete';
+  operation: 'update' | 'create' | 'delete' | 'rename';
   path: string;
+  oldPath?: string;
   content?: string;
   doc_id?: string;
   timestamp: number;
@@ -18,8 +19,9 @@ interface SyncToOverleafMessage {
 interface SyncToOverleafResponse {
   type: 'sync_to_overleaf_response';
   project_id: string;
-  operation: 'update' | 'create' | 'delete';
+  operation: 'update' | 'create' | 'delete' | 'rename';
   path: string;
+  oldPath?: string;
   success: boolean;
   error?: string;
   doc_id?: string;
@@ -103,7 +105,7 @@ export class OverleafSyncManager {
       let content: string | undefined;
 
       // Only read content for create and update operations
-      if (event.type !== 'delete') {
+      if (event.type === 'create' || event.type === 'update') {
         content = await readFile(
           join(this.projectPath, event.path),
           'utf-8'
@@ -113,13 +115,28 @@ export class OverleafSyncManager {
       // Find docId from mapping
       const docId = this.pathToDocId.get(event.path);
 
+      // For rename, find docId from old path
+      let renameDocId: string | undefined;
+      if (event.type === 'rename' && event.oldPath) {
+        renameDocId = this.pathToDocId.get(event.oldPath);
+      }
+
       // Determine operation type:
       // - If FileChangeEvent says delete, use delete
+      // - If FileChangeEvent says rename, use rename
       // - If we have a docId in mapping, use update (file already exists on Overleaf)
       // - Otherwise, use create (new file that needs to be created on Overleaf)
-      let operation: 'update' | 'create' | 'delete';
+      let operation: 'update' | 'create' | 'delete' | 'rename';
       if (event.type === 'delete') {
         operation = 'delete';
+      } else if (event.type === 'rename') {
+        operation = 'rename';
+        console.log(`[OverleafSyncManager] 📝 File renamed: ${event.oldPath} -> ${event.path}`);
+        if (renameDocId) {
+          console.log(`[OverleafSyncManager] 📝 Found docId for ${event.oldPath}: ${renameDocId}, using RENAME`);
+        } else {
+          console.log(`[OverleafSyncManager] ⚠️ No docId for ${event.oldPath}, rename may fail`);
+        }
       } else if (docId) {
         operation = 'update';
         console.log(`[OverleafSyncManager] 📝 Found docId for ${event.path}: ${docId}, using UPDATE`);
@@ -134,8 +151,9 @@ export class OverleafSyncManager {
         project_id: this.projectId,
         operation,
         path: event.path,
+        oldPath: event.oldPath,
         content,
-        doc_id: docId,
+        doc_id: (operation === 'update' || operation === 'delete') ? docId : renameDocId,
         timestamp: Date.now()
       };
 
@@ -164,6 +182,18 @@ export class OverleafSyncManager {
       if (response.operation === 'delete') {
         this.pathToDocId.delete(response.path);
         console.log(`[OverleafSyncManager] ✅ Unmapped ${response.path}`);
+      }
+
+      // Update mapping (rename operation)
+      if (response.operation === 'rename' && response.oldPath) {
+        const docId = this.pathToDocId.get(response.oldPath);
+        if (docId) {
+          this.pathToDocId.delete(response.oldPath);
+          this.pathToDocId.set(response.path, docId);
+          console.log(`[OverleafSyncManager] ✅ Remapped ${response.oldPath} → ${response.path} (${docId})`);
+        } else {
+          console.warn(`[OverleafSyncManager] ⚠️ Rename succeeded but no docId found for ${response.oldPath}`);
+        }
       }
     } else {
       console.error(`[OverleafSyncManager] ❌ Sync failed: ${response.operation} ${response.path}`);
