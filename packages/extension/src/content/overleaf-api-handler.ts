@@ -201,31 +201,25 @@ export class OverleafAPIHandler {
       throw new Error('doc_id is required for delete operation');
     }
 
-    const response = await this.retryWithBackoff(
-      async () => await fetch(
-        `/project/${this.projectId}/doc/${message.doc_id}`,
-        {
-          method: 'DELETE'
-        }
-      ),
-      `Delete ${message.path}`
-    );
+    console.log(`[APIHandler] 🗑️ Deleting via DOM: ${message.path}`);
 
-    // 404 is also success (file already deleted)
-    if (!response.ok && response.status !== 404) {
-      throw new Error(`Delete failed: ${response.status} ${response.statusText}`);
+    // Use DOM manipulation to delete the file
+    try {
+      await this.deleteFileViaDOM(message.doc_id);
+      console.log(`[APIHandler] ✅ Deleted: ${message.path}`);
+
+      return {
+        type: 'sync_to_overleaf_response',
+        project_id: this.projectId,
+        operation: 'delete',
+        path: message.path,
+        success: true,
+        timestamp: Date.now()
+      };
+    } catch (error) {
+      console.error(`[APIHandler] ❌ Delete via DOM failed:`, error);
+      throw error;
     }
-
-    console.log(`[APIHandler] ✅ Deleted: ${message.path}`);
-
-    return {
-      type: 'sync_to_overleaf_response',
-      project_id: this.projectId,
-      operation: 'delete',
-      path: message.path,
-      success: true,
-      timestamp: Date.now()
-    };
   }
 
   private async renameDocument(message: SyncToOverleafMessage): Promise<SyncToOverleafResponse> {
@@ -627,6 +621,200 @@ export class OverleafAPIHandler {
     await this.sleep(1500);
 
     console.log(`[APIHandler] ✅ Rename completed`);
+  }
+
+  /**
+   * Delete a file by simulating user interaction with the file tree UI
+   *
+   * Steps:
+   * 1. Find the file in the file tree (by docId or filename)
+   * 2. Click the file to select it (so it becomes .selected)
+   * 3. Click the menu button to open the context menu
+   * 4. Click the "Delete" menu item (6th item in dropdown)
+   * 5. Wait for the confirmation modal to appear
+   * 6. Click the "Delete" button in the modal
+   * 7. Wait for the delete operation to complete
+   */
+  private async deleteFileViaDOM(docId: string): Promise<void> {
+    console.log(`[APIHandler] 🔍 Looking for file in tree: ${docId}`);
+
+    // Step 1: Find the file element
+    let fileElement: Element | null = null;
+
+    // Try to find by data-entity-id first
+    fileElement = document.querySelector(`[data-entity-id="${docId}"]`);
+
+    // Fallback: find by filename using global mapping
+    if (!fileElement) {
+      console.log(`[APIHandler] ⚠️ Could not find by data-entity-id, trying filename...`);
+
+      // Get file info from global mapping
+      const docInfo = (window as any).__overleaf_docIdToPath__?.get(docId);
+      if (!docInfo) {
+        throw new Error(`Could not find file info for doc ${docId}`);
+      }
+
+      const path = docInfo.path;
+      const fileName = path.split('/').pop() || path;
+
+      console.log(`[APIHandler] 🔍 Looking for file: ${fileName} (path: ${path})`);
+
+      // Find all file name spans in the tree
+      const nameSpans = document.querySelectorAll('#ide-redesign-file-tree .item-name span');
+
+      for (const span of nameSpans) {
+        if (span.textContent?.trim() === fileName) {
+          // Found a matching filename, now check if it's the right one by looking at the path
+          // Walk up the tree to find the file entity
+          const fileDetails = span.closest('.file-tree-entity-details');
+          if (fileDetails) {
+            const li = fileDetails.closest('li');
+            if (li) {
+              fileElement = li;
+              console.log(`[APIHandler] ✅ Found file element by filename: ${fileName}`);
+              break;
+            }
+          }
+        }
+      }
+    } else {
+      console.log(`[APIHandler] ✅ Found file element by data-entity-id`);
+    }
+
+    if (!fileElement) {
+      throw new Error(`Could not find file element for doc ${docId}`);
+    }
+
+    // Find the clickable element (file-tree-entity-details)
+    const fileDetails = fileElement.querySelector('.file-tree-entity-details');
+    if (!fileDetails) {
+      throw new Error('Could not find file tree entity details');
+    }
+
+    // Step 2: Click the file to select it (so it becomes .selected)
+    console.log(`[APIHandler] 🔍 Clicking file to select it...`);
+    (fileDetails as HTMLElement).click();
+    await this.sleep(300); // Wait for selection to take effect
+
+    // Step 3: Find and click the menu button
+    const menuButton = fileElement.querySelector('.menu-button .entity-menu-toggle');
+    if (!menuButton) {
+      throw new Error('Could not find menu button');
+    }
+
+    console.log(`[APIHandler] ✅ Found menu button, clicking...`);
+    (menuButton as HTMLElement).click();
+    await this.sleep(500); // Wait for dropdown to appear
+
+    // Step 4: Find and click the "Delete" menu item (6th item in the dropdown)
+    console.log(`[APIHandler] 🔍 Looking for Delete menu item (6th item)...`);
+
+    let deleteClicked = false;
+    let deleteMenuItem: HTMLElement | null = null;
+
+    // Try to find the 6th <li> element
+    const deleteLi = document.querySelector('#dropdown-file-tree-context-menu > li:nth-child(6)');
+
+    if (deleteLi) {
+      // Find the <a> tag inside the <li>
+      const deleteLink = deleteLi.querySelector('a.dropdown-item');
+      if (deleteLink) {
+        console.log(`[APIHandler] ✅ Found Delete menu item <a> (6th item), clicking...`);
+        deleteMenuItem = deleteLink as HTMLElement;
+      }
+    }
+
+    if (!deleteMenuItem) {
+      console.log(`[APIHandler] ⚠️ Could not find Delete <a> by :nth-child(6), trying text search...`);
+      // Fallback: try to find by text content
+      const allItems = document.querySelectorAll('#dropdown-file-tree-context-menu li');
+      for (const item of allItems) {
+        const link = item.querySelector('a.dropdown-item');
+        if (!link) continue;
+
+        const text = link.textContent?.trim().toLowerCase();
+        console.log(`[APIHandler] 🔍 Checking menu item: "${text}"`);
+        if (text === 'delete' || text === 'delete...') {
+          console.log(`[APIHandler] ✅ Found Delete menu item by text, clicking...`);
+          deleteMenuItem = link as HTMLElement;
+          break;
+        }
+      }
+    }
+
+    if (!deleteMenuItem) {
+      throw new Error('Could not find Delete menu item');
+    }
+
+    console.log(`[APIHandler] 🖱️ Simulating click on Delete menu item...`);
+    this.simulateClick(deleteMenuItem);
+    deleteClicked = true;
+
+    // Step 5: Wait for the confirmation modal to appear
+    console.log(`[APIHandler] ⏳ Waiting for delete confirmation modal to appear...`);
+    await this.sleep(1000);
+
+    // Step 6: Find and click the Delete button in the modal
+    console.log(`[APIHandler] 🔍 Looking for Delete button in modal...`);
+
+    let deleteButton: HTMLElement | null = null;
+
+    // Try the specific selector first
+    deleteButton = document.querySelector('body > div.fade.modal.show > div > div > div > div.modal-footer > button.d-inline-grid.btn.btn-danger');
+
+    if (!deleteButton) {
+      console.log(`[APIHandler] ⚠️ Could not find Delete button by specific selector, trying broader search...`);
+
+      // Try to find any danger button in a modal footer
+      const modals = document.querySelectorAll('.modal.show');
+      console.log(`[APIHandler] 🔍 Found ${modals.length} visible modals`);
+
+      for (const modal of modals) {
+        const footer = modal.querySelector('.modal-footer');
+        if (!footer) continue;
+
+        const dangerButtons = footer.querySelectorAll('.btn-danger');
+        console.log(`[APIHandler] 🔍 Found ${dangerButtons.length} danger buttons in modal footer`);
+
+        for (const btn of dangerButtons) {
+          const text = btn.textContent?.trim().toLowerCase();
+          console.log(`[APIHandler] 🔍 Checking button text: "${text}"`);
+
+          if (text === 'delete') {
+            deleteButton = btn as HTMLElement;
+            console.log(`[APIHandler] ✅ Found Delete button in modal`);
+            break;
+          }
+        }
+
+        if (deleteButton) break;
+      }
+    }
+
+    if (!deleteButton) {
+      // Debug: log what we can find in modals
+      console.log(`[APIHandler] 🔍 Debug: listing all buttons in visible modals...`);
+      const modals = document.querySelectorAll('.modal.show');
+      for (const modal of modals) {
+        const allButtons = modal.querySelectorAll('button');
+        console.log(`[APIHandler] 🔍 Modal has ${allButtons.length} buttons:`);
+        allButtons.forEach((btn, i) => {
+          console.log(`[APIHandler] 🔍   [${i}] ${btn.textContent?.trim()} (class: ${(btn as HTMLElement).className})`);
+        });
+      }
+
+      throw new Error('Could not find Delete button in modal');
+    }
+
+    console.log(`[APIHandler] ✅ Found Delete button, clicking...`);
+    console.log(`[APIHandler] 🖱️ Simulating click on Delete button...`);
+    this.simulateClick(deleteButton);
+
+    // Step 7: Wait for the delete operation to complete
+    console.log(`[APIHandler] ⏳ Waiting for delete operation to complete...`);
+    await this.sleep(2000); // Give it more time as delete operations can be slower
+
+    console.log(`[APIHandler] ✅ Delete completed`);
   }
 
   /**
