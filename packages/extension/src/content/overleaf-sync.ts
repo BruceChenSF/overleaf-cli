@@ -63,6 +63,7 @@ interface FileChange {
   path: string;
   oldPath?: string;
   docId: string;
+  isDirectory?: boolean;  // NEW: True if this is a directory/folder
 }
 
 type ChangeEventHandler = (change: FileChange) => void;
@@ -75,6 +76,7 @@ export class OverleafWebSocketClient {
   private messageSeq = 0;
   private pendingRequests = new Map<number, (response: any) => void>();
   private docIdToPath = new Map<string, DocInfo>();
+  private folderIdToPath = new Map<string, DocInfo>();  // NEW: Track folders
   private projectJoined = false;
   private baseUrl: string;
   private onChangeCallback?: ChangeEventHandler;
@@ -251,7 +253,8 @@ export class OverleafWebSocketClient {
         this.onChangeCallback({
           type: 'created',
           path: docPath,
-          docId: docId
+          docId: docId,
+          isDirectory: false  // This is a document, not a directory
         });
       } else if (!docPath) {
         console.warn(`[Overleaf WS] ⚠️ Could not extract path from ${message.name}:`, message.args);
@@ -278,8 +281,92 @@ export class OverleafWebSocketClient {
         this.onChangeCallback({
           type: 'created',
           path: arg0.path || `/${arg0.name}`,
-          docId: arg0.file
+          docId: arg0.file,
+          isDirectory: false  // This is a file, not a directory
         });
+      }
+    } else if (message.name === 'reciveNewFolder' || message.name === 'folderCreated' || message.name === 'newFolderCreated') {
+      // A new folder was created in Overleaf
+      console.log(`[Overleaf WS] 📢📁 ${message.name} received:`, message.args);
+
+      // 🔧 FIX: Overleaf format is [parentFolderId, folderObject, rootFolderId]
+      // Example: ['69b43489a4dfe75fa1468e8d', {name: 'newsubfolder2', _id: '69b43495a8d925416a88b7fe', ...}, '69a6f0e4be9dc19b8d151c31']
+      // The first parameter is the PARENT folder ID, not the new folder's ID!
+      // The actual new folder ID is in folderObject._id
+
+      let folderId: string | undefined;
+      let folderName: string | undefined;
+      let parentFolderId: string | undefined;
+      let rootFolderId: string | undefined;
+
+      // Extract from array format
+      if (Array.isArray(message.args)) {
+        parentFolderId = message.args[0] as string;  // 🔧 FIX: First param is PARENT folder ID
+        const folderObj = message.args[1] as any;
+        rootFolderId = message.args[2] as string;   // Third param is rootFolder ID
+
+        if (folderObj) {
+          folderName = folderObj.name;
+          folderId = folderObj._id;  // New folder ID is in folderObject._id
+        }
+      }
+
+      console.log(`[Overleaf WS] 📁 Folder created in Overleaf: ${folderName || '(unnamed)'}`);
+      console.log(`[Overleaf WS]    New folder ID: ${folderId}`);
+      console.log(`[Overleaf WS]    Parent folder ID: ${parentFolderId}`);
+      console.log(`[Overleaf WS]    Root folder ID: ${rootFolderId}`);
+
+      // 🔍 Debug: Log all known folders in both mappings
+      console.log(`[Overleaf WS] 🔍 Known folders in folderIdToPath:`, Array.from(this.folderIdToPath.entries()).map(([id, info]) => `${id} -> ${info.path}`));
+
+      // Build folder path by finding parent folder path
+      let folderPath: string | undefined;
+      if (folderName) {
+        if (parentFolderId) {
+          // 🔧 FIX: Try to find parent folder in BOTH mappings (folderIdToPath and docIdToPath)
+          let parentInfo = this.folderIdToPath.get(parentFolderId);
+          if (!parentInfo) {
+            parentInfo = this.docIdToPath.get(parentFolderId);
+          }
+
+          if (parentInfo) {
+            folderPath = `${parentInfo.path}/${folderName}`.replace(/^rootFolder\//, '');
+            console.log(`[Overleaf WS] ✅ Found parent folder path: ${parentInfo.path} (from ${this.folderIdToPath.has(parentFolderId) ? 'folderIdToPath' : 'docIdToPath'})`);
+          } else {
+            // Parent folder not found in mapping (might be rootFolder or not yet mapped)
+            // Use folder name as path (will be in root)
+            folderPath = folderName;
+            console.log(`[Overleaf WS] ⚠️ Parent folder ${parentFolderId} not found in either mapping, using root path`);
+          }
+        } else {
+          // No parent folder, assume root
+          folderPath = folderName;
+        }
+      }
+
+      console.log(`[Overleaf WS] 📁 Resolved folder path: ${folderPath}`);
+
+      // 🔧 FIX: Update folderIdToPath mapping for folder (not docIdToPath)
+      if (folderId && folderPath) {
+        this.folderIdToPath.set(folderId, {
+          id: folderId,
+          path: folderPath,
+          name: folderName || folderPath,
+          type: 'file'  // Use 'file' type for consistency with Overleaf's convention
+        });
+        console.log(`[Overleaf WS] ✅ Mapped folder ${folderId} -> ${folderPath} in folderIdToPath`);
+      }
+
+      if (this.onChangeCallback && folderPath) {
+        console.log(`[Overleaf WS] 📤 Sending folder creation notification: ${folderPath}`);
+        this.onChangeCallback({
+          type: 'created',
+          path: folderPath,
+          docId: folderId || '',
+          isDirectory: true  // This is a folder
+        });
+      } else if (!folderPath) {
+        console.warn(`[Overleaf WS] ⚠️ Could not extract path from ${message.name}:`, message.args);
       }
     } else if (message.name === 'removeEntity') {
       // A document or file was removed from Overleaf
@@ -416,47 +503,108 @@ export class OverleafWebSocketClient {
    * Process project structure and build docId -> path mapping
    */
   private processProjectStructure(response: OverleafJoinProjectResponse): void {
-    const queue: OverleafFolder[] = [...response.project.rootFolder];
+    // 🔧 FIX: Use a queue with parent path information
+    interface FolderWithParent {
+      folder: OverleafFolder;
+      parentPath: string;  // Full path of parent folder
+    }
+
+    const queue: FolderWithParent[] = response.project.rootFolder.map(folder => ({
+      folder,
+      parentPath: ''  // rootFolder has no parent path
+    }));
 
     console.log('[Overleaf WS] Processing project structure...');
 
+    // 🔍 Debug: Log rootFolder structure
+    console.log('[Overleaf WS] 🔍 rootFolder count:', response.project.rootFolder.length);
+    response.project.rootFolder.forEach((folder, index) => {
+      console.log(`[Overleaf WS] 🔍 rootFolder[${index}]:`, {
+        _id: folder._id,
+        name: folder.name,
+        foldersCount: folder.folders?.length || 0,
+        docsCount: folder.docs?.length || 0,
+        fileRefsCount: folder.fileRefs?.length || 0
+      });
+    });
+
     // Process folder structure with BFS traversal
     while (queue.length > 0) {
-      const folder = queue.shift();
+      const { folder, parentPath } = queue.shift()!;
       if (!folder) continue;
+
+      // 🔧 FIX: Build full path by combining parent path and folder name
+      let fullPath: string;
+      if (folder.name === 'rootFolder') {
+        fullPath = '';  // rootFolder is the base, so its path is empty
+      } else if (parentPath === '') {
+        fullPath = folder.name;  // Direct child of rootFolder
+      } else {
+        fullPath = `${parentPath}/${folder.name}`;  // Nested folder
+      }
+
+      // 🔍 Debug: Log current folder being processed
+      console.log(`[Overleaf WS] 🔍 Processing folder: ${folder.name} (id: ${folder._id})`);
+      console.log(`[Overleaf WS] 🔍   Parent path: "${parentPath}"`);
+      console.log(`[Overleaf WS] 🔍   Full path: "${fullPath}"`);
 
       // Process documents in current folder
       for (const doc of folder.docs) {
-        const path = `${folder.name}/${doc.name}`.replace(/^rootFolder\//, '');
+        const docPath = fullPath ? `${fullPath}/${doc.name}` : doc.name;
         this.docIdToPath.set(doc._id, {
           id: doc._id,
-          path: path,
+          path: docPath,
           name: doc.name,
           type: 'doc'
         });
-        console.log(`[Overleaf WS] Mapped doc ${doc._id} -> ${path}`);
+        console.log(`[Overleaf WS] Mapped doc ${doc._id} -> ${docPath}`);
       }
 
       // Process file references (images, etc.) in current folder
       for (const fileRef of folder.fileRefs) {
-        const path = `${folder.name}/${fileRef.name}`.replace(/^rootFolder\//, '');
+        const filePath = fullPath ? `${fullPath}/${fileRef.name}` : fileRef.name;
         this.docIdToPath.set(fileRef._id, {
           id: fileRef._id,
-          path: path,
+          path: filePath,
           name: fileRef.name,
           type: 'file',
           hash: fileRef.hash
         });
-        console.log(`[Overleaf WS] Mapped file ${fileRef._id} -> ${path} (hash: ${fileRef.hash})`);
+        console.log(`[Overleaf WS] Mapped file ${fileRef._id} -> ${filePath} (hash: ${fileRef.hash})`);
       }
 
-      // Add subfolders to queue
+      // 🔧 Record folder information (excluding rootFolder)
+      if (folder._id && folder.name !== 'rootFolder') {
+        this.folderIdToPath.set(folder._id, {
+          id: folder._id,
+          path: fullPath,
+          name: folder.name,
+          type: 'file'  // Use 'file' type for folders (Overleaf's internal convention)
+        });
+        console.log(`[Overleaf WS] 📁 Mapped folder ${folder._id} -> ${fullPath}`);
+      }
+
+      // Add subfolders to queue with current folder's path as parent
       if (folder.folders && folder.folders.length > 0) {
-        queue.push(...folder.folders);
+        console.log(`[Overleaf WS] 🔍 Adding ${folder.folders.length} subfolders to queue from ${folder.name}`);
+        folder.folders.forEach((subfolder, idx) => {
+          console.log(`[Overleaf WS] 🔍   Subfolder[${idx}]:`, {
+            _id: subfolder._id,
+            name: subfolder.name,
+            foldersCount: subfolder.folders?.length || 0,
+            docsCount: subfolder.docs?.length || 0
+          });
+        });
+        // 🔧 FIX: Pass current folder's full path to children
+        const subfoldersWithParent = folder.folders.map(subfolder => ({
+          folder: subfolder,
+          parentPath: fullPath
+        }));
+        queue.push(...subfoldersWithParent);
       }
     }
 
-    console.log(`[Overleaf WS] ✅ Processed ${this.docIdToPath.size} items in project`);
+    console.log(`[Overleaf WS] ✅ Processed ${this.docIdToPath.size} files and ${this.folderIdToPath.size} folders in project`);
   }
 
   /**
@@ -517,6 +665,13 @@ export class OverleafWebSocketClient {
    */
   getAllDocIds(): string[] {
     return Array.from(this.docIdToPath.keys());
+  }
+
+  /**
+   * Get all folder IDs
+   */
+  getAllFolderIds(): string[] {
+    return Array.from(this.folderIdToPath.keys());
   }
 
   /**
@@ -696,6 +851,40 @@ export class OverleafWebSocketClient {
   }
 
   /**
+   * Sync all folders and return their paths
+   * This should be called before syncAllFiles() to ensure folder structure exists
+   */
+  async syncAllFolders(): Promise<string[]> {
+    console.log('[Overleaf WS] 🔄 Starting folder sync...');
+
+    await this.waitForProjectJoin();
+
+    const allFolderIds = this.getAllFolderIds();
+    console.log('[Overleaf WS] ✅ Found', allFolderIds.length, 'folders in project');
+
+    const folderPaths: string[] = [];
+
+    for (const folderId of allFolderIds) {
+      try {
+        const folderInfo = this.folderIdToPath.get(folderId);
+        if (!folderInfo) {
+          console.warn('[Overleaf WS] ⚠️ No info found for folder', folderId, ', skipping');
+          continue;
+        }
+
+        console.log('[Overleaf WS] 📁 Syncing folder:', folderInfo.path);
+        folderPaths.push(folderInfo.path);
+        console.log('[Overleaf WS] ✅ Synced folder:', folderInfo.path);
+      } catch (error) {
+        console.error('[Overleaf WS] ❌ Failed to sync folder', folderId, ':', error);
+      }
+    }
+
+    console.log('[Overleaf WS] ✅ Folder sync complete:', folderPaths.length, 'folders');
+    return folderPaths;
+  }
+
+  /**
    * Sync all files and return their contents
    */
   async syncAllFiles(): Promise<SyncedFile[]> {
@@ -766,6 +955,7 @@ export class OverleafWebSocketClient {
     }
     this.pendingRequests.clear();
     this.docIdToPath.clear();
+    this.folderIdToPath.clear();
     this.projectJoined = false;
     this.onChangeCallback = undefined;
   }

@@ -233,6 +233,29 @@ async function requestInitialSync(): Promise<void> {
     (window as any).__overleaf_docIdToPath__ = overleafWsClient.getDocIdToPathMap();
     console.log('[Mirror] ✅ Exposed docIdToPath mapping to global');
 
+    // 🔧 NEW: Sync all folders first (before files)
+    console.log('[Mirror] 📁 Syncing folder structure from Overleaf...');
+    const syncedFolders = await overleafWsClient.syncAllFolders();
+    console.log('[Mirror] ✅ Synced', syncedFolders.length, 'folders from Overleaf');
+
+    // Send folder creation events to mirror server
+    console.log('[Mirror] 📤 Sending folder creation events to mirror server...');
+
+    for (const folderPath of syncedFolders) {
+      const message = {
+        type: 'directory_created' as const,
+        project_id: projectId,
+        path: folderPath,
+        folder_id: '',  // Will be filled by server from docId mapping
+        timestamp: Date.now()
+      };
+
+      mirrorClient!.send(message);
+      console.log('[Mirror] ✅ Sent folder creation:', folderPath);
+    }
+
+    console.log('[Mirror] ✅ All folders sent to mirror server');
+
     // Sync all files
     const syncedFiles = await overleafWsClient.syncAllFiles();
 
@@ -271,52 +294,75 @@ async function requestInitialSync(): Promise<void> {
 
     // 🔧 Register callback for file operation events (keep connection alive)
     overleafWsClient.onChange(async (change) => {
-      console.log(`[Mirror] 📢 File operation detected: ${change.type} - ${change.path}`);
+      console.log(`[Mirror] 📢 File operation detected: ${change.type} - ${change.path}${change.isDirectory ? ' (📁 DIRECTORY)' : ''}`);
 
       if (change.type === 'created') {
-        // New file created - fetch content and send to server
-        if (mirrorClient && projectId) {
-          try {
-            const docInfo = overleafWsClient!.getDocInfo(change.docId);
-            if (docInfo) {
-              let content: string | ArrayBuffer;
+        // Check if this is a directory creation
+        const isDirectory = change.isDirectory || false;
 
-              if (docInfo.type === 'doc') {
-                // Fetch document content
-                const lines = await overleafWsClient!.joinDoc(change.docId);
-                await overleafWsClient!.leaveDoc(change.docId);
-                content = lines.join('\n');
-                console.log(`[Mirror] ✅ Fetched content for ${change.path} (${content.length} chars)`);
-              } else {
-                // For binary files, download via blob
-                content = await overleafWsClient!.downloadFile(change.docId);
-                console.log(`[Mirror] ✅ Downloaded ${change.path} (${(content as ArrayBuffer).byteLength} bytes)`);
+        if (isDirectory) {
+          // 🔔 NEW: Directory created - log and send message to server
+          console.log(`[Mirror] 📁 [PLACEHOLDER] Directory creation detected in Overleaf`);
+          console.log(`[Mirror]    Path: ${change.path}`);
+          console.log(`[Mirror]    Folder ID: ${change.docId}`);
+          console.log(`[Mirror] ⚠️ [TODO] Directory creation not yet implemented`);
+
+          if (mirrorClient && projectId) {
+            // Send directory creation event to mirror server
+            mirrorClient.send({
+              type: 'directory_created' as const,
+              project_id: projectId,
+              path: change.path,
+              folder_id: change.docId,
+              timestamp: Date.now()
+            });
+            console.log(`[Mirror] 📤 Sent directory creation event to server: ${change.path}`);
+          }
+        } else {
+          // New file created - fetch content and send to server
+          if (mirrorClient && projectId) {
+            try {
+              const docInfo = overleafWsClient!.getDocInfo(change.docId);
+              if (docInfo) {
+                let content: string | ArrayBuffer;
+
+                if (docInfo.type === 'doc') {
+                  // Fetch document content
+                  const lines = await overleafWsClient!.joinDoc(change.docId);
+                  await overleafWsClient!.leaveDoc(change.docId);
+                  content = lines.join('\n');
+                  console.log(`[Mirror] ✅ Fetched content for ${change.path} (${content.length} chars)`);
+                } else {
+                  // For binary files, download via blob
+                  content = await overleafWsClient!.downloadFile(change.docId);
+                  console.log(`[Mirror] ✅ Downloaded ${change.path} (${(content as ArrayBuffer).byteLength} bytes)`);
+                }
+
+                // Send file creation event to mirror server
+                mirrorClient.send({
+                  type: 'file_created' as const,
+                  project_id: projectId,
+                  file_name: change.path,
+                  file_id: change.docId,
+                  timestamp: Date.now()
+                });
+
+                // Send file content
+                mirrorClient.send({
+                  type: 'file_sync' as const,
+                  project_id: projectId,
+                  path: change.path,
+                  content_type: docInfo.type,
+                  doc_id: change.docId,  // 🔧 Include docId
+                  content: docInfo.type === 'file' ? arrayBufferToBase64(content as ArrayBuffer) : content as string,
+                  timestamp: Date.now()
+                });
+
+                console.log(`[Mirror] ✅ Synced new file to mirror server: ${change.path}`);
               }
-
-              // Send file creation event to mirror server
-              mirrorClient.send({
-                type: 'file_created' as const,
-                project_id: projectId,
-                file_name: change.path,
-                file_id: change.docId,
-                timestamp: Date.now()
-              });
-
-              // Send file content
-              mirrorClient.send({
-                type: 'file_sync' as const,
-                project_id: projectId,
-                path: change.path,
-                content_type: docInfo.type,
-                doc_id: change.docId,  // 🔧 Include docId
-                content: docInfo.type === 'file' ? arrayBufferToBase64(content as ArrayBuffer) : content as string,
-                timestamp: Date.now()
-              });
-
-              console.log(`[Mirror] ✅ Synced new file to mirror server: ${change.path}`);
+            } catch (error) {
+              console.error(`[Mirror] ❌ Failed to sync new file ${change.path}:`, error);
             }
-          } catch (error) {
-            console.error(`[Mirror] ❌ Failed to sync new file ${change.path}:`, error);
           }
         }
       } else if (change.type === 'deleted') {

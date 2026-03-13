@@ -35,6 +35,7 @@ export class FileWatcher {
   private pendingDeletes = new Map<string, PendingDelete>();
   private readonly RENAME_DETECTION_WINDOW = 3000; // 3 second window to detect renames (increased for Windows)
   private fileSizes = new Map<string, number>(); // Track file sizes for rename detection
+  private isWatching = false; // Track whether monitoring is enabled
 
   constructor(
     private projectId: string,
@@ -203,6 +204,33 @@ export class FileWatcher {
             });
           }
         }, this.RENAME_DETECTION_WINDOW + 500); // Add 500ms buffer (was 100ms)
+      })
+      .on('addDir', (path) => {
+        const relativePath = this.extractRelativePath(path);
+        console.log(`[FileWatcher] ➕📂 Directory added: ${relativePath}`);
+
+        // Check if this directory is being synced by the server (marker file exists)
+        const syncId = isDirectoryBeingSynced(this.projectDir, relativePath);
+
+        if (syncId) {
+          console.log(`[FileWatcher] 🔇 Ignoring server directory creation (marker file exists): ${relativePath}`);
+          console.log(`[FileWatcher] 📤 Sending ACK to complete directory sync operation: ${syncId}`);
+
+          // Send ACK to acknowledge that FileWatcher detected and ignored this change
+          acknowledgeDirectorySync(syncId);
+          return;
+        }
+
+        // Only trigger callback if monitoring is enabled
+        if (this.isWatching) {
+          console.log(`[FileWatcher] 📁 Directory creation detected: ${relativePath}`);
+          this.onChangeCallback?.({
+            type: 'create',
+            path: relativePath
+          });
+        } else {
+          console.log(`[FileWatcher] 🔇 Directory creation ignored (monitoring disabled): ${relativePath}`);
+        }
       })
       .on('error', (error) => {
         console.error(`[FileWatcher] ❌ Watcher error: ${error}`);
@@ -475,6 +503,132 @@ export function acknowledgeFileSync(syncId: string): void {
 }
 
 /**
+ * Start a sync operation for a directory
+ * Creates a marker file inside the directory and returns the sync ID
+ *
+ * Marker file is placed INSIDE the directory being created
+ * Example: For directory "folder1/folder2", marker file is "folder1/folder2/.folder2.syncing"
+ *
+ * State Machine: IDLE -> PENDING
+ */
+export function startDirectorySync(projectId: string, projectDir: string, directoryPath: string): string {
+  const syncId = generateSyncId();
+
+  // Normalize path separators to match system (e.g., / to \ on Windows)
+  const path = require('path');
+  const normalizedPath = path.join(...directoryPath.split('/'));
+
+  // Extract directory name for marker file
+  const parts = normalizedPath.split(path.sep);
+  const dirName = parts[parts.length - 1];
+  const markerFileName = `.${dirName}.syncing`;
+
+  // Marker file is placed INSIDE the directory being created
+  const markerFilePath = join(projectDir, normalizedPath, markerFileName);
+
+  // Create marker file (this is a clear signal that we're creating this directory)
+  const fs = require('fs');
+
+  // Ensure the directory exists first (we'll create it if it doesn't)
+  if (!fs.existsSync(join(projectDir, normalizedPath))) {
+    fs.mkdirSync(join(projectDir, normalizedPath), { recursive: true });
+  }
+
+  fs.writeFileSync(markerFilePath, syncId, 'utf8');
+
+  // Track this sync operation with state machine
+  const syncOperation: SyncOperation = {
+    syncId,
+    projectId,
+    filePath: normalizedPath,
+    markFilePath: markerFilePath,
+    state: SyncState.PENDING,
+    createdAt: Date.now()
+  };
+
+  activeSyncs.set(syncId, syncOperation);
+  filePathToSyncId.set(normalizedPath, syncId);
+
+  console.log(`[startDirectorySync] Created marker for directory ${normalizedPath} (syncId: ${syncId})`);
+  console.log(`[startDirectorySync] Marker file: ${markerFilePath}`);
+
+  return syncId;
+}
+
+/**
+ * End a sync operation for a directory (directory has been created)
+ *
+ * State Machine: PENDING -> AWAITING_ACK
+ * Does NOT delete marker file immediately - waits for FileWatcher ACK
+ */
+export function endDirectorySync(syncId: string): void {
+  console.log(`[endDirectorySync] 🔧 Directory created, waiting for ACK`);
+  console.log(`[endDirectorySync] 🔧 Sync ID: ${syncId}`);
+
+  const sync = activeSyncs.get(syncId);
+  if (!sync) {
+    console.warn(`[endDirectorySync] ⚠️ Sync ID not found: ${syncId}`);
+    return;
+  }
+
+  // Transition state: PENDING -> AWAITING_ACK
+  sync.state = SyncState.AWAITING_ACK;
+  console.log(`[endDirectorySync] ✅ State transition: ${SyncState.PENDING} -> ${SyncState.AWAITING_ACK}`);
+
+  // Set timeout for ACK (prevent deadlock if FileWatcher never detects change)
+  sync.timeoutTimer = setTimeout(() => {
+    console.log(`[endDirectorySync] ⏱️ ACK timeout for ${syncId}, forcing cleanup`);
+    acknowledgeDirectorySync(syncId);
+  }, ACK_TIMEOUT);
+
+  console.log(`[endDirectorySync] ⏱️ ACK timer started (${ACK_TIMEOUT}ms timeout)`);
+}
+
+/**
+ * ACK callback from FileWatcher for directory operations
+ *
+ * State Machine: AWAITING_ACK -> COMPLETED
+ * Deletes marker file and cleans up
+ */
+export function acknowledgeDirectorySync(syncId: string): void {
+  console.log(`[acknowledgeDirectorySync] ✅ ACK received for directory sync: ${syncId}`);
+
+  const sync = activeSyncs.get(syncId);
+  if (!sync) {
+    console.warn(`[acknowledgeDirectorySync] ⚠️ Sync ID not found: ${syncId}`);
+    return;
+  }
+
+  // Clear timeout if exists
+  if (sync.timeoutTimer) {
+    clearTimeout(sync.timeoutTimer);
+    console.log(`[acknowledgeDirectorySync] ⏱️ ACK timer cleared`);
+  }
+
+  // Transition state: AWAITING_ACK -> COMPLETED
+  const oldState = sync.state;
+  sync.state = SyncState.COMPLETED;
+  console.log(`[acknowledgeDirectorySync] ✅ State transition: ${oldState} -> ${SyncState.COMPLETED}`);
+
+  // Delete marker file (safe to delete now, FileWatcher has processed it)
+  if (existsSync(sync.markFilePath)) {
+    try {
+      console.log(`[acknowledgeDirectorySync] 🔧 Deleting marker file: ${sync.markFilePath}`);
+      unlinkSync(sync.markFilePath);
+      console.log(`[acknowledgeDirectorySync] ✅ Marker file deleted successfully`);
+    } catch (error) {
+      console.error(`[acknowledgeDirectorySync] ❌ Failed to delete marker file: ${sync.markFilePath}`, error);
+    }
+  }
+
+  // Cleanup maps
+  activeSyncs.delete(syncId);
+  filePathToSyncId.delete(sync.filePath);
+
+  console.log(`[acknowledgeDirectorySync] ✅ Directory sync operation completed and cleaned up`);
+}
+
+/**
  * Check if a file is currently being synced (by checking for marker file)
  *
  * Returns the syncId if being synced, null otherwise
@@ -506,6 +660,47 @@ export function isFileBeingSynced(projectDir: string, filePath: string): string 
     }
   } catch (error) {
     console.error(`[isFileBeingSynced] Error reading marker file:`, error);
+    return null;
+  }
+}
+
+/**
+ * Check if a directory is currently being synced (by checking for marker file)
+ *
+ * Marker file for directory is placed INSIDE the directory being created
+ * Example: For directory "folder1/folder2", marker file is "folder1/folder2/.folder2.syncing"
+ *
+ * Returns the syncId if being synced, null otherwise
+ */
+export function isDirectoryBeingSynced(projectDir: string, directoryPath: string): string | null {
+  // Marker file is placed inside the directory being created
+  const parts = directoryPath.split('/');
+  const dirName = parts[parts.length - 1];
+  const markerFileName = `.${dirName}.syncing`;
+  const markerFilePath = join(projectDir, directoryPath, markerFileName);
+
+  if (!existsSync(markerFilePath)) {
+    return null;
+  }
+
+  // Read syncId from marker file
+  try {
+    const fs = require('fs');
+    const syncId = fs.readFileSync(markerFilePath, 'utf8');
+
+    // Verify this sync is still active and in AWAITING_ACK state
+    const sync = activeSyncs.get(syncId);
+    if (sync && sync.state === SyncState.AWAITING_ACK) {
+      return syncId;
+    } else if (sync) {
+      console.warn(`[isDirectoryBeingSynced] Sync found but in unexpected state: ${sync.state}`);
+      return syncId;
+    } else {
+      console.warn(`[isDirectoryBeingSynced] Marker file exists but syncId not found in activeSyncs`);
+      return syncId;
+    }
+  } catch (error) {
+    console.error(`[isDirectoryBeingSynced] Error reading marker file:`, error);
     return null;
   }
 }

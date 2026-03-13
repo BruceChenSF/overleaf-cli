@@ -285,6 +285,15 @@ export class MirrorServer {
         console.log('[Server] ➕ Received file creation event:', fileCreatedMsg.file_name);
         this.handleFileCreated(fileCreatedMsg.project_id, fileCreatedMsg.file_name);
         break;
+      case 'directory_created':
+        // 🔧 处理文件夹创建
+        const dirCreatedMsg = message as any;
+        console.log('[Server] 📁➕ Received directory creation event:', dirCreatedMsg.path);
+        console.log('[Server]    Folder ID:', dirCreatedMsg.folder_id);
+        console.log('[Server] ⚠️ [PLACEHOLDER] Directory creation not yet implemented');
+        console.log('[Server]    Would create directory:', dirCreatedMsg.path);
+        this.handleDirectoryCreated(dirCreatedMsg.project_id, dirCreatedMsg.path, dirCreatedMsg.folder_id);
+        break;
       case 'file_deleted':
         // 🔧 处理文件删除
         const fileDeletedMsg = message as any;
@@ -515,6 +524,67 @@ export class MirrorServer {
       console.log('[Server] ✅ Created empty file:', fileName);
     } catch (error) {
       console.error('[Server] ❌ Failed to create file:', fileName, error);
+    }
+  }
+
+  /**
+   * 处理文件夹创建事件
+   *
+   * @param projectId - 项目 ID
+   * @param directoryPath - 文件夹路径
+   * @param folderId - 文件夹 ID
+   * @private
+   */
+  private handleDirectoryCreated(projectId: string, directoryPath: string, folderId: string): void {
+    try {
+      console.log('[Server] 📁➕ Creating directory:', directoryPath);
+      console.log('[Server]    Folder ID:', folderId);
+
+      const projectConfig = this.configStore.getProjectConfig(projectId);
+      const pathModule = require('path');
+      const fs = require('fs');
+
+      const dirPath = pathModule.join(projectConfig.localPath, directoryPath);
+
+      // Check if directory already exists
+      if (fs.existsSync(dirPath)) {
+        console.log('[Server] ⚠️ Directory already exists:', directoryPath, '(skipping)');
+        return;
+      }
+
+      // 🔧 IMPORTANT: Start directory sync BEFORE creating directory
+      // This creates a marker file to prevent FileWatcher from triggering a sync loop
+      const { startDirectorySync, endDirectorySync } = require('./filesystem/watcher');
+      const syncId = startDirectorySync(projectId, projectConfig.localPath, directoryPath);
+      console.log('[Server] 🔒 Started directory sync operation:', syncId);
+
+      // Create the directory (note: startDirectorySync already created it, but let's be sure)
+      if (!fs.existsSync(dirPath)) {
+        fs.mkdirSync(dirPath, { recursive: true });
+        console.log('[Server] ✅ Created directory:', directoryPath);
+      } else {
+        console.log('[Server] ℹ️ Directory already existed (created by startDirectorySync):', directoryPath);
+      }
+
+      // 🔧 IMPORTANT: End directory sync AFTER creating directory
+      // This tells FileWatcher that the directory is ready and marker file can be cleaned up
+      endDirectorySync(syncId);
+      console.log('[Server] 🔓 Ended directory sync operation, waiting for FileWatcher ACK');
+
+      // 🔧 IMPORTANT: Update docId mapping if folderId is provided
+      // This allows OverleafSyncManager to correctly track this folder
+      if (folderId) {
+        const syncManager = this.syncManagers.get(projectId);
+        if (syncManager) {
+          syncManager.updateMapping(directoryPath, folderId);
+          console.log(`[Server] 📝 Updated docId mapping for directory: ${directoryPath} -> ${folderId}`);
+        } else {
+          console.log(`[Server] ⚠️ No syncManager found for ${projectId}, mapping will be updated later`);
+        }
+      }
+
+    } catch (error) {
+      console.error('[Server] ❌ Failed to create directory:', directoryPath, error);
     }
   }
 
