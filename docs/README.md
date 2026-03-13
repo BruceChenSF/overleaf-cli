@@ -38,7 +38,7 @@
 
 ### 3. [FILE-OPERATIONS-SYNC.md](./FILE-OPERATIONS-SYNC.md) ⭐⭐⭐⭐⭐
 **阅读时间**: 15 分钟
-**重要性**: 🔥🔥🔥 **最新完整技术方案**
+**重要性**: 🔥🔥🔥 **Overleaf → 本地文件操作同步**
 
 **内容概要**:
 - ✅ 文件创建、删除、重命名的完整实现
@@ -48,6 +48,21 @@
 - 🧪 测试指南和调试技巧
 
 **适合人群**: 开发者、AI Agent（**强烈推荐优先阅读**）
+
+---
+
+### 4. [LOCAL-TO-OVERLEAF-SYNC.md](./LOCAL-TO-OVERLEAF-SYNC.md) ⭐⭐⭐⭐⭐
+**阅读时间**: 20 分钟
+**重要性**: 🔥🔥🔥 **本地 → Overleaf 实时同步方案（NEW）**
+
+**内容概要**:
+- ✅ 本地编辑实时同步到 Overleaf 的完整方案
+- 🏗️ 文件切换与编辑器就绪检测
+- 🔄 循环同步防护机制（syncId）
+- 🎯 DOM 操作更新 CodeMirror 6
+- 🧪 完整的测试验证场景
+
+**适合人群**: 开发者、AI Agent（**最新技术方案**）
 
 ---
 
@@ -134,7 +149,8 @@
 | **如何安装使用** | [README.md](../README.md#快速开始) |
 | **架构设计** | [ARCHITECTURE.md](./ARCHITECTURE.md) |
 | **文件同步原理** | [FILE-SYNC-ARCHITECTURE.md](./FILE-SYNC-ARCHITECTURE.md) |
-| **文件操作实现** | [FILE-OPERATIONS-SYNC.md](./FILE-OPERATIONS-SYNC.md) |
+| **Overleaf → 本地文件操作** | [FILE-OPERATIONS-SYNC.md](./FILE-OPERATIONS-SYNC.md) |
+| **本地 → Overleaf 实时同步** | [LOCAL-TO-OVERLEAF-SYNC.md](./LOCAL-TO-OVERLEAF-SYNC.md) |
 | **Overleaf API** | [overleaf-api-reference.md](./overleaf-api-reference.md) |
 | **如何测试** | [MANUAL-TESTING-GUIDE.md](./MANUAL-TESTING-GUIDE.md) |
 | **当前进度** | [PROGRESS-REPORT.md](./PROGRESS-REPORT.md) |
@@ -146,11 +162,12 @@
 
 | 文档 | 状态 | 最后更新 | 准确性 |
 |------|------|---------|--------|
-| README.md | ✅ 最新 | 2026-03-09 | 100% |
-| ARCHITECTURE.md | ✅ 最新 | 2026-03-08 | 100% |
-| FILE-OPERATIONS-SYNC.md | ✅ 最新 | 2026-03-09 | 100% |
-| FILE-SYNC-ARCHITECTURE.md | ✅ 最新 | 2026-03-08 | 100% |
-| PROGRESS-REPORT.md | ✅ 最新 | 2026-03-09 | 100% |
+| README.md | ✅ 最新 | 2026-03-13 | 100% |
+| ARCHITECTURE.md | ✅ 稳定 | 2026-03-08 | 100% |
+| FILE-OPERATIONS-SYNC.md | ✅ 稳定 | 2026-03-09 | 100% |
+| FILE-SYNC-ARCHITECTURE.md | ✅ 稳定 | 2026-03-08 | 100% |
+| LOCAL-TO-OVERLEAF-SYNC.md | ✅ **最新** | 2026-03-13 | 100% |
+| PROGRESS-REPORT.md | ⚠️ 需更新 | 2026-03-09 | 90% |
 | overleaf-api-reference.md | ✅ 稳定 | 2026-03-06 | 100% |
 | MANUAL-TESTING-GUIDE.md | ✅ 稳定 | 2026-03-08 | 100% |
 | INSTALLATION.md | ✅ 稳定 | 2026-03-03 | 100% |
