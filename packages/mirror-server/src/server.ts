@@ -291,6 +291,12 @@ export class MirrorServer {
         console.log('[Server] 🗑️ Received file deletion event:', fileDeletedMsg.path);
         this.handleFileDeleted(fileDeletedMsg.project_id, fileDeletedMsg.path);
         break;
+      case 'initial_sync_complete':
+        // 🔧 初始同步完成，启用文件监控
+        const syncCompleteMsg = message as any;
+        console.log('[Server] ✅ Initial sync complete for project:', syncCompleteMsg.project_id);
+        this.handleInitialSyncComplete(syncCompleteMsg.project_id);
+        break;
       case 'file_renamed':
         // 🔧 处理文件重命名
         const fileRenamedMsg = message as any;
@@ -624,6 +630,28 @@ export class MirrorServer {
       this.startFileSync(projectId, docIdToPath);
     } else {
       console.log('[Server] ℹ️ File sync not enabled (set enableFileSync: true in config to enable)');
+    }
+  }
+
+  /**
+   * Handle initial sync completion
+   * Called when browser extension finishes initial Overleaf -> local sync
+   * At this point, it's safe to enable file watching
+   *
+   * @param projectId - Project ID
+   * @private
+   */
+  private handleInitialSyncComplete(projectId: string): void {
+    console.log(`[Server] ✅ Initial sync complete for project: ${projectId}`);
+    console.log(`[Server] 🚀 Enabling file monitoring for project: ${projectId}`);
+
+    // Enable file watching for this project
+    const fileWatcher = this.fileWatchers.get(projectId);
+    if (fileWatcher) {
+      console.log(`[Server] 📋 File watcher found, monitoring should be enabled here`);
+      console.log(`[Server] ⚠️ TODO: Implement enableMonitoring() in FileWatcher`);
+    } else {
+      console.warn(`[Server] ⚠️ No file watcher found for project: ${projectId}`);
     }
   }
 

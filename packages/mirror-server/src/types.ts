@@ -15,6 +15,7 @@ export type WSMessage =
   | FileCreatedMessage
   | FileDeletedMessage
   | FileRenamedMessage
+  | InitialSyncCompleteMessage
   | SyncToOverleafMessage
   | SyncToOverleafResponse;
 
@@ -40,6 +41,12 @@ export interface FileRenamedMessage {
   old_name: string;
   new_name: string;
   file_id: string;
+  timestamp: number;
+}
+
+export interface InitialSyncCompleteMessage {
+  type: 'initial_sync_complete';
+  project_id: string;
   timestamp: number;
 }
 

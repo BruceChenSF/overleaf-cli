@@ -260,6 +260,15 @@ async function requestInitialSync(): Promise<void> {
 
     console.log('[Mirror] ✅ Initial sync complete!');
 
+    // 🔧 NEW: Send initial_sync_complete message to server
+    console.log('[Mirror] 📤 Sending initial_sync_complete message to server...');
+    mirrorClient!.send({
+      type: 'initial_sync_complete' as const,
+      project_id: projectId,
+      timestamp: Date.now()
+    });
+    console.log('[Mirror] ✅ Initial sync complete message sent');
+
     // 🔧 Register callback for file operation events (keep connection alive)
     overleafWsClient.onChange(async (change) => {
       console.log(`[Mirror] 📢 File operation detected: ${change.type} - ${change.path}`);
