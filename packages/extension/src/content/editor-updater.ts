@@ -57,9 +57,14 @@ export class EditorUpdater {
       console.log(`[EditorUpdater] ⏳ Waiting for joinDoc event...`);
       await joinDocPromise;
 
-      // 🔥 IMPORTANT: Wait for CodeMirror to fully initialize after joinDoc
+      // 🔥 IMPORTANT: Wait for CodeMirror to be truly ready
+      // This actively checks the editor state instead of using a fixed delay
       console.log(`[EditorUpdater] ⏳ Waiting for CodeMirror to be ready...`);
-      await this.waitForEditorReady();
+      const isReady = await this.waitForEditorReady();
+
+      if (!isReady) {
+        throw new Error('CodeMirror editor failed to initialize after document switch');
+      }
     }
 
     // Step 2: Find the CodeMirror 6 content element
@@ -102,31 +107,89 @@ export class EditorUpdater {
 
   /**
    * Wait for CodeMirror editor to be ready after document switch
-   * This checks if the editor has content and is fully initialized
+   * This actively checks if the editor is fully initialized by:
+   * 1. Checking for .cm-content element
+   * 2. Checking for .cm-line elements (content rendered)
+   * 3. Checking for reasonable content length
+   * 4. Optionally checking Overleaf's editor state
    */
-  private async waitForEditorReady(timeout = 5000): Promise<void> {
+  private async waitForEditorReady(timeout = 5000): Promise<boolean> {
     console.log(`[EditorUpdater] ⏳ Waiting for CodeMirror editor ready...`);
 
     const startTime = Date.now();
-    const checkInterval = 100;
+    const checkInterval = 50; // Check every 50ms
+    let lastLogTime = 0;
 
     while (Date.now() - startTime < timeout) {
-      const cmContent = document.querySelector('.cm-content');
-      if (cmContent) {
-        // Check if editor has some content rendered
-        const hasLines = cmContent.querySelector('.cm-line');
-        const hasContent = (cmContent as HTMLElement).textContent?.length || 0 > 0;
+      const elapsed = Date.now() - startTime;
 
-        if (hasLines && hasContent) {
-          console.log(`[EditorUpdater] ✅ CodeMirror editor ready`);
-          return;
-        }
+      // Log progress every 500ms
+      if (elapsed - lastLogTime > 500) {
+        console.log(`[EditorUpdater] ⏳ Still waiting for editor... (${elapsed}ms)`);
+        lastLogTime = elapsed;
       }
 
-      await this.sleep(checkInterval);
+      // Check 1: .cm-content exists
+      const cmContent = document.querySelector('.cm-content');
+      if (!cmContent) {
+        await this.sleep(checkInterval);
+        continue;
+      }
+
+      // Check 2: Has .cm-line elements (editor has rendered content)
+      const lines = cmContent.querySelectorAll('.cm-line');
+      if (lines.length === 0) {
+        await this.sleep(checkInterval);
+        continue;
+      }
+
+      // Check 3: Editor has actual content (not just empty lines)
+      const content = (cmContent as HTMLElement).textContent || '';
+      if (content.length === 0) {
+        await this.sleep(checkInterval);
+        continue;
+      }
+
+      // Check 4: Editor is not in a loading state
+      const isLoading = cmContent.querySelector('.cm-loading') !== null;
+      if (isLoading) {
+        await this.sleep(checkInterval);
+        continue;
+      }
+
+      // Check 5: Try to verify Overleaf's editor state (if available)
+      try {
+        const editor = (window as any).editor;
+        if (editor && editor.documentManager) {
+          const currentDoc = editor.documentManager.getCurrentDoc();
+          if (currentDoc && currentDoc._id) {
+            // Editor state is accessible and has a current doc
+            console.log(`[EditorUpdater] ✅ CodeMirror editor ready (verified via editor state)`);
+            return true;
+          }
+        }
+      } catch (e) {
+        // Editor state not accessible, but DOM checks passed
+      }
+
+      // All DOM checks passed
+      console.log(`[EditorUpdater] ✅ CodeMirror editor ready (verified via DOM, ${lines.length} lines, ${content.length} chars)`);
+      return true;
     }
 
-    console.log(`[EditorUpdater] ⚠️ Editor readiness check timeout, proceeding anyway`);
+    // Timeout - but don't fail, just log and continue
+    console.warn(`[EditorUpdater] ⚠️ Editor readiness check timeout after ${timeout}ms`);
+    console.warn(`[EditorUpdater] ⚠️ Proceeding with update anyway (editor might not be fully ready)`);
+
+    // Do a final check to see if at least .cm-content exists
+    const cmContent = document.querySelector('.cm-content');
+    if (cmContent) {
+      console.log(`[EditorUpdater] ⚠️ .cm-content found, will attempt update`);
+      return true;
+    }
+
+    console.error(`[EditorUpdater] ❌ .cm-content not found, update will likely fail`);
+    return false;
   }
 
   /**
@@ -354,13 +417,7 @@ export class EditorUpdater {
             cleanup();
 
             console.log(`[EditorUpdater] ✅ Document loaded: ${targetDocId}`);
-
-            // 🔥 IMPORTANT: Wait for CodeMirror to fully initialize
-            // joinDoc only means "started loading", not "ready for editing"
-            setTimeout(() => {
-              console.log(`[EditorUpdater] ✅ CodeMirror initialization wait complete`);
-              resolve();
-            }, 1000); // Wait 1 second for CodeMirror to initialize
+            resolve();
           }
         }
       };
