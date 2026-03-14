@@ -919,15 +919,15 @@ export class MirrorServer {
         }
       }
 
-      // 🔧 FIX: Delay completion to allow FileWatcher to detect child file deletions
-      // Without this delay, FileWatcher detects child file deletes AFTER the operation is completed,
-      // causing circular sync attempts for child files
-      const DIRECTORY_DETECTION_WINDOW = 3000; // 3 seconds (longer than file rename due to nested structure)
-      setTimeout(() => {
+      // 🔧 FIX: Use event-driven completion instead of setTimeout
+      // Pass Orchestrator completion callback to be triggered when FileWatcher ACKs
+      // This is more elegant than hard-coded timeout delays
+      const onCompleteCallback = () => {
         this.orchestrator.completeOperation(operation.operationId);
-        console.log('[Server] ✅ Completed directory delete operation after FileWatcher detection window');
-      }, DIRECTORY_DETECTION_WINDOW);
-      console.log('[Server] ⏳ Waiting for FileWatcher to detect child file deletions before completing operation...');
+        console.log('[Server] ✅ Completed directory delete operation (FileWatcher ACK received)');
+      };
+      endDirectorySync(syncId, onCompleteCallback);
+      console.log('[Server] ⏳ Waiting for FileWatcher to acknowledge directory delete before completing operation...');
 
       // OLD: Marker mechanism (kept for rollback safety - Phase 3 will remove this)
       // 🔧 Transition to AWAITING_ACK state (FileWatcher will ACK when it detects the delete)

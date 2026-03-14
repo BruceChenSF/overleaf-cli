@@ -413,6 +413,7 @@ interface SyncOperation {
   state: SyncState;
   createdAt: number;
   timeoutTimer?: NodeJS.Timeout;
+  onComplete?: () => void;  // Callback when operation is completed and ACKed
 }
 
 /**
@@ -565,7 +566,12 @@ export function acknowledgeFileSync(syncId: string): void {
  *
  * State Machine: IDLE -> PENDING
  */
-export function startDirectorySync(projectId: string, projectDir: string, directoryPath: string): string {
+export function startDirectorySync(
+  projectId: string,
+  projectDir: string,
+  directoryPath: string,
+  onComplete?: () => void
+): string {
   const syncId = generateSyncId();
 
   // Normalize path separators to match system (e.g., / to \ on Windows)
@@ -597,7 +603,8 @@ export function startDirectorySync(projectId: string, projectDir: string, direct
     filePath: normalizedPath,
     markFilePath: markerFilePath,
     state: SyncState.PENDING,
-    createdAt: Date.now()
+    createdAt: Date.now(),
+    onComplete  // Store completion callback
   };
 
   activeSyncs.set(syncId, syncOperation);
@@ -615,7 +622,7 @@ export function startDirectorySync(projectId: string, projectDir: string, direct
  * State Machine: PENDING -> AWAITING_ACK
  * Does NOT delete marker file immediately - waits for FileWatcher ACK
  */
-export function endDirectorySync(syncId: string): void {
+export function endDirectorySync(syncId: string, onComplete?: () => void): void {
   console.log(`[endDirectorySync] 🔧 Directory created, waiting for ACK`);
   console.log(`[endDirectorySync] 🔧 Sync ID: ${syncId}`);
 
@@ -623,6 +630,12 @@ export function endDirectorySync(syncId: string): void {
   if (!sync) {
     console.warn(`[endDirectorySync] ⚠️ Sync ID not found: ${syncId}`);
     return;
+  }
+
+  // Store completion callback if provided
+  if (onComplete) {
+    sync.onComplete = onComplete;
+    console.log(`[endDirectorySync] 📞 Registered completion callback for: ${syncId}`);
   }
 
   // Transition state: PENDING -> AWAITING_ACK
@@ -672,6 +685,17 @@ export function acknowledgeDirectorySync(syncId: string): void {
       console.log(`[acknowledgeDirectorySync] ✅ Marker file deleted successfully`);
     } catch (error) {
       console.error(`[acknowledgeDirectorySync] ❌ Failed to delete marker file: ${sync.markFilePath}`, error);
+    }
+  }
+
+  // Call completion callback if provided (e.g., to complete Orchestrator operation)
+  if (sync.onComplete) {
+    try {
+      console.log(`[acknowledgeDirectorySync] 📞 Calling completion callback for: ${syncId}`);
+      sync.onComplete();
+      console.log(`[acknowledgeDirectorySync] ✅ Completion callback executed successfully`);
+    } catch (error) {
+      console.error(`[acknowledgeDirectorySync] ❌ Completion callback error:`, error);
     }
   }
 
