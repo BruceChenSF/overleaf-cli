@@ -231,32 +231,46 @@ export class OverleafWebSocketClient {
 
       // Overleaf format: [parentFolderId, docObject, docType, rootFolderId]
       // Similar to reciveNewFolder, the actual doc_id is in docObject._id
+      const parentFolderId = message.args[0] as string;  // NEW: Parent folder ID
       const docInfo = message.args[1] as any;
       const docId = docInfo?._id;  // Real doc_id is in docObject._id
-      const docPath = docInfo?.path || docInfo?.name || (typeof message.args[1] === 'string' ? message.args[1] : undefined);
-      const docName = docInfo?.name || docPath || `doc_${docId}`;
+      const fileName = docInfo?.path || docInfo?.name || (typeof message.args[1] === 'string' ? message.args[1] : undefined);
+      const docName = docInfo?.name || fileName || `doc_${docId}`;
 
-      console.log(`[Overleaf WS] 📝 File created in Overleaf: ${docPath} (id: ${docId})`);
+      // 🔧 FIX: Build full path by finding parent folder path
+      let fullDocPath = fileName;
+      if (parentFolderId && parentFolderId !== 'rootFolder') {
+        const parentFolder = this.folderIdToPath.get(parentFolderId);
+        if (parentFolder && parentFolder.path) {
+          // Parent folder found, build full path
+          fullDocPath = parentFolder.path === '' ? fileName : `${parentFolder.path}/${fileName}`;
+          console.log(`[Overleaf WS] 🔍 Resolved full doc path: ${fullDocPath} (parent: ${parentFolder.path})`);
+        } else {
+          console.log(`[Overleaf WS] ⚠️ Parent folder ${parentFolderId} not found in folderIdToPath, using root path`);
+        }
+      }
 
-      // Update docId mapping with the correct doc_id
-      if (docId && docPath) {
+      console.log(`[Overleaf WS] 📝 File created in Overleaf: ${fullDocPath} (id: ${docId})`);
+
+      // Update docId mapping with the correct doc_id and full path
+      if (docId && fullDocPath) {
         this.docIdToPath.set(docId, {
           id: docId,
-          path: docPath,
+          path: fullDocPath,  // Use full path instead of just filename
           name: docName,
           type: 'doc'
         });
-        console.log(`[Overleaf WS] ✅ Mapped doc ${docId} -> ${docPath}`);
+        console.log(`[Overleaf WS] ✅ Mapped doc ${docId} -> ${fullDocPath}`);
       }
 
-      if (this.onChangeCallback && docPath) {
+      if (this.onChangeCallback && fullDocPath) {
         this.onChangeCallback({
           type: 'created',
-          path: docPath,
+          path: fullDocPath,  // Use full path
           docId: docId,
           isDirectory: false  // This is a document, not a directory
         });
-      } else if (!docPath) {
+      } else if (!fullDocPath) {
         console.warn(`[Overleaf WS] ⚠️ Could not extract path from ${message.name}:`, message.args);
       }
     } else if (message.name === 'reciveNewFile' || message.name === 'fileUploaded' || message.name === 'fileCreated') {

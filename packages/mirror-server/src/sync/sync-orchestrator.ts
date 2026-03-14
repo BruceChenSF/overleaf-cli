@@ -201,8 +201,23 @@ export class SyncOrchestrator {
     const operationId = this.pathToOperation.get(normalizedPath);
     const oldPathOperationId = normalizedOldPath ? this.pathToOperation.get(normalizedOldPath) : null;
 
-    // 如果没有相关操作，允许处理
+    // 🔧 FIX: Check if current path is a child of a directory being deleted
+    // This handles the case where a directory delete operation should block all child file events
     if (!operationId && !oldPathOperationId) {
+      // Check all active operations to see if any is a parent directory deletion
+      for (const [trackedPath, trackedOpId] of this.pathToOperation.entries()) {
+        const trackedOp = this.operations.get(trackedOpId);
+        if (trackedOp &&
+            trackedOp.type === 'delete' &&
+            trackedOp.status === 'executing' &&
+            normalizedPath.startsWith(trackedPath + '/')) {
+          return {
+            shouldProcess: false,
+            reason: `Parent directory being deleted (${trackedPath})`,
+            relatedOperation: trackedOp
+          };
+        }
+      }
       return { shouldProcess: true, reason: 'No conflicting operation' };
     }
 
