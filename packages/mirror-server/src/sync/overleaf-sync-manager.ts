@@ -241,4 +241,10 @@ export class OverleafSyncManager {
     this.pathToDocId.set(normalizedPath, docId);
     console.log(`[OverleafSyncManager] ✅ Updated mapping: ${normalizedPath} → ${docId}`);
   }
+
+  removeMapping(path: string): void {
+    const normalizedPath = this.normalizePath(path);
+    this.pathToDocId.delete(normalizedPath);
+    console.log(`[OverleafSyncManager] 🗑️ Removed mapping: ${normalizedPath}`);
+  }
 }

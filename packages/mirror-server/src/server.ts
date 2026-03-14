@@ -312,6 +312,18 @@ export class MirrorServer {
         console.log('[Server] ✏️ Received file rename event:', fileRenamedMsg.old_name, '->', fileRenamedMsg.new_name);
         this.handleFileRenamed(fileRenamedMsg.project_id, fileRenamedMsg.old_name, fileRenamedMsg.new_name);
         break;
+      case 'directory_renamed':
+        // 🔧 处理文件夹重命名
+        const dirRenamedMsg = message as any;
+        console.log('[Server] 📁✏️ Received directory rename event:', dirRenamedMsg.old_path, '->', dirRenamedMsg.new_path);
+        this.handleDirectoryRenamed(dirRenamedMsg.project_id, dirRenamedMsg.old_path, dirRenamedMsg.new_path, dirRenamedMsg.folder_id);
+        break;
+      case 'directory_deleted':
+        // 🔧 处理文件夹删除
+        const dirDeletedMsg = message as any;
+        console.log('[Server] 📁🗑️ Received directory deletion event:', dirDeletedMsg.path);
+        this.handleDirectoryDeleted(dirDeletedMsg.project_id, dirDeletedMsg.path, dirDeletedMsg.folder_id);
+        break;
       case 'sync_to_overleaf':
         // 🔧 Forward sync request to browser extension
         console.log('[Server] 📤 Forwarding sync request to browser extension:', (message as any).path);
@@ -655,6 +667,131 @@ export class MirrorServer {
       console.log('[Server] ✅ Renamed file:', oldName, '->', newName);
     } catch (error) {
       console.error('[Server] ❌ Failed to rename file:', oldName, '->', newName, error);
+    }
+  }
+
+  /**
+   * 处理文件夹重命名事件
+   *
+   * @param projectId - 项目 ID
+   * @param oldPath - 旧文件夹路径
+   * @param newPath - 新文件夹路径
+   * @param folderId - 文件夹 ID
+   * @private
+   */
+  private handleDirectoryRenamed(projectId: string, oldPath: string, newPath: string, folderId: string): void {
+    try {
+      console.log('[Server] 📁✏️ Renaming directory:', oldPath, '->', newPath);
+
+      const projectConfig = this.configStore.getProjectConfig(projectId);
+      const fs = require('fs');
+      const pathModule = require('path');
+
+      const fullOldPath = pathModule.join(projectConfig.localPath, oldPath);
+      const fullNewPath = pathModule.join(projectConfig.localPath, newPath);
+
+      // 检查旧文件夹是否存在
+      if (!fs.existsSync(fullOldPath)) {
+        console.log('[Server] ⚠️ Old directory not found:', fullOldPath, '(skipping)');
+        return;
+      }
+
+      // 🔧 FIX: Stop FileWatcher temporarily to avoid Windows EPERM error
+      const fileWatcher = this.fileWatchers.get(projectId);
+      if (fileWatcher) {
+        console.log('[Server] ⏸️  Stopping FileWatcher temporarily...');
+        fileWatcher.stop();
+        console.log('[Server] ✅ FileWatcher stopped');
+      }
+
+      try {
+        // Use a two-step rename with a temporary name
+        const tempName = `.temp_rename_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+        const tempPath = pathModule.join(projectConfig.localPath, tempName);
+
+        console.log('[Server] 🔄 Step 1: Rename to temporary name:', oldPath, '->', tempName);
+        fs.renameSync(fullOldPath, tempPath);
+        console.log('[Server] ✅ Temporary rename successful');
+
+        console.log('[Server] 🔄 Step 2: Rename to final name:', tempName, '->', newPath);
+        fs.renameSync(tempPath, fullNewPath);
+        console.log('[Server] ✅ Final rename successful');
+
+        console.log('[Server] ✅ Renamed directory:', oldPath, '->', newPath);
+      } finally {
+        // 🔧 IMPORTANT: Restart FileWatcher after rename is complete
+        if (fileWatcher) {
+          console.log('[Server] ▶️  Restarting FileWatcher...');
+          fileWatcher.start().then(() => {
+            console.log('[Server] ✅ FileWatcher restarted');
+          }).catch((error) => {
+            console.error('[Server] ❌ Failed to restart FileWatcher:', error);
+          });
+        }
+      }
+
+      // 🔧 IMPORTANT: Update docId mapping if folderId is provided
+      if (folderId) {
+        const syncManager = this.syncManagers.get(projectId);
+        if (syncManager) {
+          syncManager.updateMapping(newPath, folderId);
+          console.log(`[Server] 📝 Updated docId mapping for renamed directory: ${newPath} -> ${folderId}`);
+        } else {
+          console.log(`[Server] ⚠️ No syncManager found for ${projectId}`);
+        }
+      }
+    } catch (error) {
+      console.error('[Server] ❌ Failed to rename directory:', oldPath, '->', newPath, error);
+
+      // 🔧 IMPORTANT: Make sure FileWatcher is restarted even if rename fails
+      const fileWatcher = this.fileWatchers.get(projectId);
+      if (fileWatcher) {
+        console.log('[Server] ▶️  Restarting FileWatcher after error...');
+        fileWatcher.start().catch((err) => {
+          console.error('[Server] ❌ Failed to restart FileWatcher:', err);
+        });
+      }
+    }
+  }
+
+  /**
+   * 处理文件夹删除事件
+   *
+   * @param projectId - 项目 ID
+   * @param directoryPath - 文件夹路径
+   * @param folderId - 文件夹 ID
+   * @private
+   */
+  private handleDirectoryDeleted(projectId: string, directoryPath: string, folderId: string): void {
+    try {
+      console.log('[Server] 📁🗑️ Deleting directory:', directoryPath);
+
+      const projectConfig = this.configStore.getProjectConfig(projectId);
+      const fs = require('fs');
+      const pathModule = require('path');
+
+      const fullPath = pathModule.join(projectConfig.localPath, directoryPath);
+
+      // 检查文件夹是否存在
+      if (!fs.existsSync(fullPath)) {
+        console.log('[Server] ⚠️ Directory not found:', fullPath, '(skipping)');
+        return;
+      }
+
+      // 递归删除文件夹及其内容
+      fs.rmSync(fullPath, { recursive: true, force: true });
+      console.log('[Server] ✅ Deleted directory:', directoryPath);
+
+      // 🔧 Remove from docId mapping
+      if (folderId) {
+        const syncManager = this.syncManagers.get(projectId);
+        if (syncManager) {
+          syncManager.removeMapping(directoryPath);
+          console.log(`[Server] 📝 Removed docId mapping for deleted directory: ${directoryPath}`);
+        }
+      }
+    } catch (error) {
+      console.error('[Server] ❌ Failed to delete directory:', directoryPath, error);
     }
   }
 

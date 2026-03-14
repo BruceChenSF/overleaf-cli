@@ -366,29 +366,62 @@ async function requestInitialSync(): Promise<void> {
           }
         }
       } else if (change.type === 'deleted') {
-        // File deleted - send deletion event to server
+        // File or folder deleted - send deletion event to server
         if (mirrorClient && projectId) {
-          mirrorClient.send({
-            type: 'file_deleted' as const,
-            project_id: projectId,
-            file_id: change.docId,
-            path: change.path,
-            timestamp: Date.now()
-          });
-          console.log(`[Mirror] ✅ Sent file deletion event: ${change.path}`);
+          const isDirectory = change.isDirectory || false;
+
+          if (isDirectory) {
+            // Directory deleted
+            console.log(`[Mirror] 📁 Directory deletion detected: ${change.path}`);
+            mirrorClient.send({
+              type: 'directory_deleted' as const,
+              project_id: projectId,
+              path: change.path,
+              folder_id: change.docId,
+              timestamp: Date.now()
+            });
+            console.log(`[Mirror] ✅ Sent directory deletion event: ${change.path}`);
+          } else {
+            // File deleted
+            mirrorClient.send({
+              type: 'file_deleted' as const,
+              project_id: projectId,
+              file_id: change.docId,
+              path: change.path,
+              timestamp: Date.now()
+            });
+            console.log(`[Mirror] ✅ Sent file deletion event: ${change.path}`);
+          }
         }
       } else if (change.type === 'renamed') {
-        // File renamed - send rename event to server
+        // File or folder renamed - send rename event to server
         if (mirrorClient && projectId && change.oldPath) {
-          mirrorClient.send({
-            type: 'file_renamed' as const,
-            project_id: projectId,
-            old_name: change.oldPath,
-            new_name: change.path,
-            file_id: change.docId,
-            timestamp: Date.now()
-          });
-          console.log(`[Mirror] ✅ Sent file rename event: ${change.oldPath} -> ${change.path}`);
+          const isDirectory = change.isDirectory || false;
+
+          if (isDirectory) {
+            // Directory renamed
+            console.log(`[Mirror] 📁 Directory rename detected: ${change.oldPath} -> ${change.path}`);
+            mirrorClient.send({
+              type: 'directory_renamed' as const,
+              project_id: projectId,
+              old_path: change.oldPath,
+              new_path: change.path,
+              folder_id: change.docId,
+              timestamp: Date.now()
+            });
+            console.log(`[Mirror] ✅ Sent directory rename event: ${change.oldPath} -> ${change.path}`);
+          } else {
+            // File renamed
+            mirrorClient.send({
+              type: 'file_renamed' as const,
+              project_id: projectId,
+              old_name: change.oldPath,
+              new_name: change.path,
+              file_id: change.docId,
+              timestamp: Date.now()
+            });
+            console.log(`[Mirror] ✅ Sent file rename event: ${change.oldPath} -> ${change.path}`);
+          }
         }
       }
     });

@@ -369,7 +369,7 @@ export class OverleafWebSocketClient {
         console.warn(`[Overleaf WS] ⚠️ Could not extract path from ${message.name}:`, message.args);
       }
     } else if (message.name === 'removeEntity') {
-      // A document or file was removed from Overleaf
+      // A document, file, or folder was removed from Overleaf
       console.log(`[Overleaf WS] 📢 removeEntity received:`, message.args);
 
       const entityId = message.args[0] as string;
@@ -377,7 +377,30 @@ export class OverleafWebSocketClient {
 
       console.log(`[Overleaf WS] 📝 Entity removed from Overleaf: ${entityType} (${entityId})`);
 
-      // Get path from docId mapping BEFORE deleting
+      // Check if this is a folder deletion (by looking in folderIdToPath first)
+      const folderInfo = this.folderIdToPath.get(entityId);
+      if (folderInfo) {
+        // This is a folder deletion
+        const folderPath = folderInfo.path;
+        console.log(`[Overleaf WS] 📁 Folder deletion detected: ${folderPath}`);
+
+        // Remove from folderIdToPath mapping
+        this.folderIdToPath.delete(entityId);
+        console.log(`[Overleaf WS] 🗑️ Removed ${entityId} from folderIdToPath mapping`);
+
+        if (this.onChangeCallback) {
+          console.log(`[Overleaf WS] 📤 Sending folder deletion notification: ${folderPath}`);
+          this.onChangeCallback({
+            type: 'deleted',
+            path: folderPath,
+            docId: entityId,
+            isDirectory: true  // This is a folder deletion
+          });
+        }
+        return;
+      }
+
+      // If not in folderIdToPath, check if it's a file/doc deletion
       const docInfo = this.docIdToPath.get(entityId);
 
       if (!docInfo) {
@@ -386,7 +409,8 @@ export class OverleafWebSocketClient {
           this.onChangeCallback({
             type: 'deleted',
             path: `/${entityId}`,  // Fallback path
-            docId: entityId
+            docId: entityId,
+            isDirectory: false
           });
         }
         return;
@@ -404,7 +428,8 @@ export class OverleafWebSocketClient {
         this.onChangeCallback({
           type: 'deleted',
           path: filePath,
-          docId: entityId
+          docId: entityId,
+          isDirectory: false  // This is a file/doc deletion
         });
       }
     } else if (message.name === 'docRemoved') {
@@ -450,7 +475,7 @@ export class OverleafWebSocketClient {
         });
       }
     } else if (message.name === 'reciveEntityRename') {
-      // An entity (document or file) was renamed in Overleaf
+      // An entity (document, file, or folder) was renamed in Overleaf
       console.log(`[Overleaf WS] 📢 reciveEntityRename received:`, message.args);
 
       // message.args format: [entityId, newPath, entityType]
@@ -460,7 +485,52 @@ export class OverleafWebSocketClient {
 
       console.log(`[Overleaf WS] 📝 Entity renamed: ${entityType} (${entityId}) -> ${newPath}`);
 
-      // Get old path from docId mapping
+      // Check if this is a folder rename (by looking in folderIdToPath first)
+      const folderInfo = this.folderIdToPath.get(entityId);
+      if (folderInfo) {
+        // This is a folder rename
+        const oldPath = folderInfo.path;
+        console.log(`[Overleaf WS] 📁 Folder rename detected: ${oldPath} -> ${newPath}`);
+
+        // 🔧 FIX: Overleaf only sends the new name, not the full path
+        // We need to construct the full new path by using the parent directory from oldPath
+        let fullNewPath: string;
+        const lastSlashIndex = oldPath.lastIndexOf('/');
+        if (lastSlashIndex !== -1) {
+          // Has parent directory
+          const parentPath = oldPath.substring(0, lastSlashIndex);
+          fullNewPath = `${parentPath}/${newPath}`;
+          console.log(`[Overleaf WS] 🔍 Constructed full new path: ${fullNewPath} (parent: ${parentPath}, new name: ${newPath})`);
+        } else {
+          // No parent directory (root level)
+          fullNewPath = newPath;
+          console.log(`[Overleaf WS] 🔍 No parent directory, using new name as full path: ${fullNewPath}`);
+        }
+
+        // Update folderIdToPath mapping with new path
+        this.folderIdToPath.set(entityId, {
+          ...folderInfo,
+          path: fullNewPath
+        });
+        console.log(`[Overleaf WS] ✅ Updated folder mapping for ${entityId}: ${fullNewPath}`);
+
+        // 🔧 NEW: Recursively update all children (folders and files) under this folder
+        this.updateChildPaths(oldPath, fullNewPath);
+
+        if (this.onChangeCallback) {
+          console.log(`[Overleaf WS] 📤 Sending folder rename notification: ${oldPath} -> ${fullNewPath}`);
+          this.onChangeCallback({
+            type: 'renamed',
+            path: fullNewPath,
+            oldPath: oldPath,
+            docId: entityId,
+            isDirectory: true  // This is a folder rename
+          });
+        }
+        return;
+      }
+
+      // If not in folderIdToPath, check if it's a file/doc rename
       const docInfo = this.docIdToPath.get(entityId);
 
       if (!docInfo) {
@@ -470,7 +540,8 @@ export class OverleafWebSocketClient {
           this.onChangeCallback({
             type: 'renamed',
             path: newPath,
-            docId: entityId
+            docId: entityId,
+            isDirectory: false
           });
         }
         return;
@@ -480,20 +551,36 @@ export class OverleafWebSocketClient {
       console.log(`[Overleaf WS] ✅ Found old path for ${entityId}: ${oldPath}`);
       console.log(`[Overleaf WS] ✅ Rename: ${oldPath} -> ${newPath}`);
 
+      // 🔧 FIX: Overleaf only sends the new name, not the full path
+      // We need to construct the full new path by using the parent directory from oldPath
+      let fullNewPath: string;
+      const lastSlashIndex = oldPath.lastIndexOf('/');
+      if (lastSlashIndex !== -1) {
+        // Has parent directory
+        const parentPath = oldPath.substring(0, lastSlashIndex);
+        fullNewPath = `${parentPath}/${newPath}`;
+        console.log(`[Overleaf WS] 🔍 Constructed full new path: ${fullNewPath} (parent: ${parentPath}, new name: ${newPath})`);
+      } else {
+        // No parent directory (root level)
+        fullNewPath = newPath;
+        console.log(`[Overleaf WS] 🔍 No parent directory, using new name as full path: ${fullNewPath}`);
+      }
+
       // Update docId mapping with new path
       this.docIdToPath.set(entityId, {
         ...docInfo,
-        path: newPath
+        path: fullNewPath
       });
-      console.log(`[Overleaf WS] ✅ Updated mapping for ${entityId}: ${newPath}`);
+      console.log(`[Overleaf WS] ✅ Updated mapping for ${entityId}: ${fullNewPath}`);
 
       if (this.onChangeCallback) {
-        console.log(`[Overleaf WS] 📤 Sending rename notification: ${oldPath} -> ${newPath}`);
+        console.log(`[Overleaf WS] 📤 Sending rename notification: ${oldPath} -> ${fullNewPath}`);
         this.onChangeCallback({
           type: 'renamed',
-          path: newPath,
+          path: fullNewPath,
           oldPath: oldPath,
-          docId: entityId
+          docId: entityId,
+          isDirectory: false  // This is a file/doc rename
         });
       }
     }
@@ -686,6 +773,51 @@ export class OverleafWebSocketClient {
    */
   getDocIdToPathMap(): Map<string, DocInfo> {
     return this.docIdToPath;
+  }
+
+  /**
+   * Recursively update paths for all children (folders and files) under a renamed folder
+   * This ensures that when a parent folder is renamed, all child entities have correct paths
+   *
+   * @param oldParentPath - Old parent folder path
+   * @param newParentPath - New parent folder path
+   */
+  private updateChildPaths(oldParentPath: string, newParentPath: string): void {
+    console.log(`[Overleaf WS] 🔧 Recursively updating child paths: ${oldParentPath} -> ${newParentPath}`);
+
+    let updatedCount = 0;
+
+    // Update all folders
+    for (const [folderId, folderInfo] of this.folderIdToPath.entries()) {
+      if (folderInfo.path.startsWith(oldParentPath + '/')) {
+        const relativePath = folderInfo.path.substring(oldParentPath.length + 1);
+        const newPath = `${newParentPath}/${relativePath}`;
+
+        this.folderIdToPath.set(folderId, {
+          ...folderInfo,
+          path: newPath
+        });
+        console.log(`[Overleaf WS] 📁 Updated folder path: ${folderInfo.path} -> ${newPath}`);
+        updatedCount++;
+      }
+    }
+
+    // Update all files/docs
+    for (const [docId, docInfo] of this.docIdToPath.entries()) {
+      if (docInfo.path.startsWith(oldParentPath + '/')) {
+        const relativePath = docInfo.path.substring(oldParentPath.length + 1);
+        const newPath = `${newParentPath}/${relativePath}`;
+
+        this.docIdToPath.set(docId, {
+          ...docInfo,
+          path: newPath
+        });
+        console.log(`[Overleaf WS] 📄 Updated file path: ${docInfo.path} -> ${newPath}`);
+        updatedCount++;
+      }
+    }
+
+    console.log(`[Overleaf WS] ✅ Updated ${updatedCount} child paths`);
   }
 
   /**

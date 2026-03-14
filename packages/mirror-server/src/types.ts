@@ -17,6 +17,8 @@ export type WSMessage =
   | FileRenamedMessage
   | InitialSyncCompleteMessage
   | DirectoryCreatedMessage
+  | DirectoryRenamedMessage
+  | DirectoryDeletedMessage
   | SyncToOverleafMessage
   | SyncToOverleafResponse;
 
@@ -30,6 +32,23 @@ export interface FileCreatedMessage {
 
 export interface DirectoryCreatedMessage {
   type: 'directory_created';
+  project_id: string;
+  path: string;
+  folder_id: string;
+  timestamp: number;
+}
+
+export interface DirectoryRenamedMessage {
+  type: 'directory_renamed';
+  project_id: string;
+  old_path: string;
+  new_path: string;
+  folder_id: string;
+  timestamp: number;
+}
+
+export interface DirectoryDeletedMessage {
+  type: 'directory_deleted';
   project_id: string;
   path: string;
   folder_id: string;
