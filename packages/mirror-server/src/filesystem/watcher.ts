@@ -3,6 +3,7 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { existsSync, unlinkSync, statSync, readdirSync, stat } from 'fs';
 import { promisify } from 'util';
+import type { SyncOrchestrator } from '../sync/sync-orchestrator';
 
 const statAsync = promisify(stat);
 const readdirAsync = promisify(readdirSync);
@@ -37,12 +38,15 @@ export class FileWatcher {
   private readonly RENAME_DETECTION_WINDOW = 3000; // 3 second window to detect renames (increased for Windows)
   private fileSizes = new Map<string, number>(); // Track file sizes for rename detection
   private isWatching = false; // Track whether monitoring is enabled
+  private orchestrator?: SyncOrchestrator; // NEW: SyncOrchestrator for event filtering
 
   constructor(
     private projectId: string,
-    private basePath?: string
+    private basePath?: string,
+    orchestrator?: SyncOrchestrator // NEW: Accept orchestrator parameter
   ) {
     this.projectDir = this.basePath || join(homedir(), 'overleaf-mirror', this.projectId);
+    this.orchestrator = orchestrator; // NEW: Store orchestrator reference
   }
 
   /**
@@ -84,6 +88,16 @@ export class FileWatcher {
           // Send ACK to acknowledge that FileWatcher detected and ignored this change
           acknowledgeFileSync(syncId);
           return;
+        }
+
+        // NEW: SyncOrchestrator - Check if this event should be processed
+        if (this.orchestrator) {
+          const result = this.orchestrator.shouldProcessEvent('local', 'create', relativePath);
+          if (!result.shouldProcess) {
+            console.log(`[FileWatcher] 🔇 Ignoring add event (SyncOrchestrator): ${relativePath}`);
+            console.log(`[FileWatcher] Reason: ${result.reason}`);
+            return;
+          }
         }
 
         // 🔍 Debug: Log pending deletes
@@ -169,6 +183,7 @@ export class FileWatcher {
       .on('unlink', (path) => {
         const relativePath = this.extractRelativePath(path);
 
+        // OLD: Marker mechanism (kept for rollback safety)
         // Check if this file is being synced by the server (marker file exists)
         const syncId = isFileBeingSynced(this.projectDir, relativePath);
 
@@ -179,6 +194,16 @@ export class FileWatcher {
           // Send ACK to acknowledge that FileWatcher detected and ignored this change
           acknowledgeFileSync(syncId);
           return;
+        }
+
+        // NEW: SyncOrchestrator - Check if this delete event should be processed
+        if (this.orchestrator) {
+          const filterResult = this.orchestrator.shouldProcessEvent('local', 'delete', relativePath);
+          if (!filterResult.shouldProcess) {
+            console.log(`[FileWatcher] 🔇 Ignoring delete event (SyncOrchestrator): ${relativePath}`);
+            console.log(`[FileWatcher] Reason: ${filterResult.reason}`);
+            return;
+          }
         }
 
         // Get file size from tracking map (before it's deleted)

@@ -10,6 +10,7 @@ import { FileOperationHandler } from './handlers/file-operation';
 import { ProjectConfigStore } from './config';
 import { OverleafAPIClient } from './api';
 import { TextFileSyncManager } from './sync';
+import { SyncOrchestrator } from './sync/sync-orchestrator';
 import type { WSMessage, SyncCommandMessage, ServerConfig } from './types';
 import type { EditEventMessage } from '@overleaf-cc/shared';
 import type { FileChangeEvent } from './filesystem/watcher';
@@ -33,6 +34,9 @@ export class MirrorServer {
 
   // 🔧 存储 blob hash 到文件名的映射
   private blobMappings: Map<string, Map<string, string>> = new Map(); // projectId -> Map<blobHash, filename>
+
+  // NEW: SyncOrchestrator - 中心化同步编排器
+  private orchestrator: SyncOrchestrator;
 
   constructor(httpServer?: HttpServer) {
     // Create HTTP server for API endpoints
@@ -60,6 +64,10 @@ export class MirrorServer {
     // Initialize ProjectConfigStore
     this.configStore = new ProjectConfigStore();
     console.log('[Server] ProjectConfigStore initialized');
+
+    // NEW: Initialize SyncOrchestrator
+    this.orchestrator = new SyncOrchestrator({ enableDebugLogging: true });
+    console.log('[Server] SyncOrchestrator initialized');
 
     // Start listening
     if (!httpServer) {
@@ -260,7 +268,7 @@ export class MirrorServer {
 
         // Start file watcher for this project if not already watching
         if (!this.fileWatchers.has(syncMessage.project_id)) {
-          const watcher = new FileWatcher(syncMessage.project_id);
+          const watcher = new FileWatcher(syncMessage.project_id, undefined, this.orchestrator);
           this.fileWatchers.set(syncMessage.project_id, watcher);
           watcher.start().catch((error) => {
             console.error(`Failed to start file watcher for ${syncMessage.project_id}:`, error);
@@ -615,14 +623,28 @@ export class MirrorServer {
       const fs = require('fs');
       const pathModule = require('path');
 
+      // 🔧 FIX: Normalize path separators (Windows \ to /) for Orchestrator matching
+      const normalizedPath = filePath.replace(/\\/g, '/');
+
+      // NEW: SyncOrchestrator - Start tracking operation with normalized path
+      const operation = this.orchestrator.startOperation(
+        'overleaf',
+        'delete',
+        normalizedPath,  // Use normalized path
+        undefined,
+        { projectId }
+      );
+
       const fullPath = pathModule.join(projectConfig.localPath, filePath);
 
       // 检查文件是否存在
       if (!fs.existsSync(fullPath)) {
         console.log('[Server] ⚠️ File not found:', fullPath, '(skipping)');
+        this.orchestrator.failOperation(operation.operationId);
         return;
       }
 
+      // OLD: Marker mechanism (kept for rollback safety - Phase 3 will remove this)
       // 🔧 Create marker file BEFORE deleting (this signals FileWatcher to ignore the delete)
       const syncId = startFileSync(projectId, projectConfig.localPath, filePath);
       console.log('[Server] 📝 Created delete marker:', syncId);
@@ -631,6 +653,10 @@ export class MirrorServer {
       fs.unlinkSync(fullPath);
       console.log('[Server] ✅ Deleted file:', filePath);
 
+      // NEW: SyncOrchestrator - Mark operation as complete
+      this.orchestrator.completeOperation(operation.operationId);
+
+      // OLD: Marker mechanism (kept for rollback safety - Phase 3 will remove this)
       // 🔧 Transition to AWAITING_ACK state (FileWatcher will ACK when it detects the delete)
       endFileSync(syncId);
       console.log('[Server] ⏳ Waiting for FileWatcher to acknowledge delete');
@@ -648,6 +674,15 @@ export class MirrorServer {
    * @private
    */
   private handleFileRenamed(projectId: string, oldName: string, newName: string): void {
+    // NEW: SyncOrchestrator - Start tracking operation
+    const operation = this.orchestrator.startOperation(
+      'overleaf',
+      'rename',
+      newName,
+      oldName,
+      { projectId }
+    );
+
     try {
       console.log('[Server] ✏️ Renaming file:', oldName, '->', newName);
 
@@ -661,6 +696,7 @@ export class MirrorServer {
       // 检查旧文件是否存在
       if (!fs.existsSync(oldPath)) {
         console.log('[Server] ⚠️ Old file not found:', oldPath, '(skipping)');
+        this.orchestrator.failOperation(operation.operationId);
         return;
       }
 
@@ -670,35 +706,49 @@ export class MirrorServer {
         fs.mkdirSync(newDir, { recursive: true });
       }
 
-      // 🔧 FIX: Mark old file as being renamed (to prevent false delete detection)
-      const syncManager = this.syncManagers.get(projectId);
-      if (syncManager) {
-        syncManager.markRenaming(oldName);
-        console.log('[Server] 🔄 Marked old file as being renamed:', oldName);
-      }
-
-      // 🔧 Create marker file for NEW name BEFORE renaming
-      // This tells FileWatcher to ignore the rename when it detects the new file
-      const syncId = startFileSync(projectId, projectConfig.localPath, newName);
-      console.log('[Server] 📝 Created rename marker for new name:', newName, '(syncId:', syncId + ')');
+      // OLD: Marker mechanism (kept for rollback safety)
+      // // 🔧 FIX: Mark old file as being renamed (to prevent false delete detection)
+      // const syncManager = this.syncManagers.get(projectId);
+      // if (syncManager) {
+      //   syncManager.markRenaming(oldName);
+      //   console.log('[Server] 🔄 Marked old file as being renamed:', oldName);
+      // }
+      //
+      // // 🔧 Create marker file for NEW name BEFORE renaming
+      // // This tells FileWatcher to ignore the rename when it detects the new file
+      // const syncId = startFileSync(projectId, projectConfig.localPath, newName);
+      // console.log('[Server] 📝 Created rename marker for new name:', newName, '(syncId:', syncId + ')');
 
       // 重命名文件
       fs.renameSync(oldPath, newPath);
       console.log('[Server] ✅ Renamed file:', oldName, '->', newName);
 
-      // 🔧 Transition to AWAITING_ACK state (FileWatcher will ACK when it detects the rename)
-      endFileSync(syncId);
-      console.log('[Server] ⏳ Waiting for FileWatcher to acknowledge rename');
-
-      // 🔧 Clear the renaming mark after a short delay (to ensure FileWatcher has time to detect)
+      // NEW: SyncOrchestrator - Delay completion to allow FileWatcher to detect the rename
+      // FileWatcher needs ~1-2 seconds to detect the rename and clear its pending deletes
+      // We delay completion so that shouldProcessEvent() can still block the FileWatcher's rename event
       setTimeout(() => {
-        if (syncManager) {
-          syncManager.clearRenaming(oldName);
-          console.log('[Server] ✅ Cleared renaming mark for:', oldName);
-        }
-      }, 2000); // 2 seconds should be enough for FileWatcher to detect
+        this.orchestrator.completeOperation(operation.operationId);
+        console.log('[Server] ✅ Completed rename operation after FileWatcher detection window');
+      }, 2500); // 2.5 seconds (RENAME_DETECTION_WINDOW + buffer)
+
+      console.log('[Server] ⏳ Waiting for FileWatcher to detect rename before completing operation...');
+
+      // OLD: Marker mechanism (kept for rollback safety)
+      // // 🔧 Transition to AWAITING_ACK state (FileWatcher will ACK when it detects the rename)
+      // endFileSync(syncId);
+      // console.log('[Server] ⏳ Waiting for FileWatcher to acknowledge rename');
+      //
+      // // 🔧 Clear the renaming mark after a short delay (to ensure FileWatcher has time to detect)
+      // setTimeout(() => {
+      //   if (syncManager) {
+      //     syncManager.clearRenaming(oldName);
+      //     console.log('[Server] ✅ Cleared renaming mark for:', oldName);
+      //   }
+      // }, 2000); // 2 seconds should be enough for FileWatcher to detect
     } catch (error) {
       console.error('[Server] ❌ Failed to rename file:', oldName, '->', newName, error);
+      // NEW: SyncOrchestrator - Mark operation as failed
+      this.orchestrator.failOperation(operation.operationId, error as Error);
     }
   }
 
@@ -712,6 +762,15 @@ export class MirrorServer {
    * @private
    */
   private handleDirectoryRenamed(projectId: string, oldPath: string, newPath: string, folderId: string): void {
+    // NEW: SyncOrchestrator - Start tracking operation
+    const operation = this.orchestrator.startOperation(
+      'overleaf',
+      'rename',
+      newPath,
+      oldPath,
+      { projectId, folderId, isDirectory: true }
+    );
+
     try {
       console.log('[Server] 📁✏️ Renaming directory:', oldPath, '->', newPath);
 
@@ -725,15 +784,18 @@ export class MirrorServer {
       // 检查旧文件夹是否存在
       if (!fs.existsSync(fullOldPath)) {
         console.log('[Server] ⚠️ Old directory not found:', fullOldPath, '(skipping)');
+        this.orchestrator.failOperation(operation.operationId);
         return;
       }
 
-      // 🔧 Create marker file for NEW path BEFORE stopping FileWatcher
-      // This tells FileWatcher to ignore the new directory when it restarts
-      const syncId = startDirectorySync(projectId, projectConfig.localPath, newPath);
-      console.log('[Server] 📝 Created directory rename marker for new path:', newPath, '(syncId:', syncId + ')');
+      // OLD: Marker mechanism (kept for rollback safety)
+      // // 🔧 Create marker file for NEW path BEFORE stopping FileWatcher
+      // // This tells FileWatcher to ignore the new directory when it restarts
+      // const syncId = startDirectorySync(projectId, projectConfig.localPath, newPath);
+      // console.log('[Server] 📝 Created directory rename marker for new path:', newPath, '(syncId:', syncId + ')');
 
       // 🔧 FIX: Stop FileWatcher temporarily to avoid Windows EPERM error
+      // Note: We keep this even with SyncOrchestrator as it's needed for Windows permission issues
       const fileWatcher = this.fileWatchers.get(projectId);
       if (fileWatcher) {
         console.log('[Server] ⏸️  Stopping FileWatcher temporarily...');
@@ -778,11 +840,18 @@ export class MirrorServer {
         }
       }
 
-      // 🔧 Transition to AWAITING_ACK state (FileWatcher will ACK when it detects the new directory)
-      endDirectorySync(syncId);
-      console.log('[Server] ⏳ Waiting for FileWatcher to acknowledge directory rename');
+      // NEW: SyncOrchestrator - Mark operation as complete
+      this.orchestrator.completeOperation(operation.operationId);
+
+      // OLD: Marker mechanism (kept for rollback safety)
+      // // 🔧 Transition to AWAITING_ACK state (FileWatcher will ACK when it detects the new directory)
+      // endDirectorySync(syncId);
+      // console.log('[Server] ⏳ Waiting for FileWatcher to acknowledge directory rename');
     } catch (error) {
       console.error('[Server] ❌ Failed to rename directory:', oldPath, '->', newPath, error);
+
+      // NEW: SyncOrchestrator - Mark operation as failed
+      this.orchestrator.failOperation(operation.operationId, error as Error);
 
       // 🔧 IMPORTANT: Make sure FileWatcher is restarted even if rename fails
       const fileWatcher = this.fileWatchers.get(projectId);
@@ -804,6 +873,18 @@ export class MirrorServer {
    * @private
    */
   private handleDirectoryDeleted(projectId: string, directoryPath: string, folderId: string): void {
+    // 🔧 FIX: Normalize path separators (Windows \ to /) for Orchestrator matching
+    const normalizedPath = directoryPath.replace(/\\/g, '/');
+
+    // NEW: SyncOrchestrator - Start tracking operation with normalized path
+    const operation = this.orchestrator.startOperation(
+      'overleaf',
+      'delete',
+      normalizedPath,  // Use normalized path
+      undefined,
+      { projectId, folderId, isDirectory: true }
+    );
+
     try {
       console.log('[Server] 📁🗑️ Deleting directory:', directoryPath);
 
@@ -816,9 +897,11 @@ export class MirrorServer {
       // 检查文件夹是否存在
       if (!fs.existsSync(fullPath)) {
         console.log('[Server] ⚠️ Directory not found:', fullPath, '(skipping)');
+        this.orchestrator.failOperation(operation.operationId);
         return;
       }
 
+      // OLD: Marker mechanism (kept for rollback safety - Phase 3 will remove this)
       // 🔧 Create marker file BEFORE deleting (this signals FileWatcher to ignore the delete)
       const syncId = startDirectorySync(projectId, projectConfig.localPath, directoryPath);
       console.log('[Server] 📝 Created directory delete marker:', syncId);
@@ -836,11 +919,17 @@ export class MirrorServer {
         }
       }
 
+      // NEW: SyncOrchestrator - Mark operation as complete
+      this.orchestrator.completeOperation(operation.operationId);
+
+      // OLD: Marker mechanism (kept for rollback safety - Phase 3 will remove this)
       // 🔧 Transition to AWAITING_ACK state (FileWatcher will ACK when it detects the delete)
       endDirectorySync(syncId);
       console.log('[Server] ⏳ Waiting for FileWatcher to acknowledge directory delete');
     } catch (error) {
       console.error('[Server] ❌ Failed to delete directory:', directoryPath, error);
+      // NEW: SyncOrchestrator - Mark operation as failed
+      this.orchestrator.failOperation(operation.operationId, error as Error);
     }
   }
 
@@ -942,7 +1031,7 @@ export class MirrorServer {
 
     // Create FileWatcher
     console.log(`[Server] 🔧 Creating FileWatcher...`);
-    const fileWatcher = new FileWatcher(projectId, config.localPath);
+    const fileWatcher = new FileWatcher(projectId, config.localPath, this.orchestrator);
 
     // Create SyncManager
     console.log(`[Server] 🔧 Creating OverleafSyncManager...`);
@@ -1022,6 +1111,16 @@ export class MirrorServer {
     } else {
       console.error(`[Server] ❌ Sync to Overleaf failed: ${operation} ${path} - ${error}`);
     }
+  }
+
+  /**
+   * Get the SyncOrchestrator instance (for debugging and testing)
+   *
+   * @returns The SyncOrchestrator instance
+   * @public
+   */
+  getOrchestrator(): SyncOrchestrator {
+    return this.orchestrator;
   }
 
   broadcast(message: WSMessage): void {

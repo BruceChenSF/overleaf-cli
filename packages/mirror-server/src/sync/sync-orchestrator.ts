@@ -192,9 +192,14 @@ export class SyncOrchestrator {
     path: string,
     oldPath?: string
   ): EventFilterResult {
+    // 🔧 FIX: Normalize path separators to forward slashes for consistent matching
+    // This fixes Windows path separator issues (\ vs /)
+    const normalizedPath = path.replace(/\\/g, '/');
+    const normalizedOldPath = oldPath ? oldPath.replace(/\\/g, '/') : undefined;
+
     // 检查当前路径是否有正在进行的操作
-    const operationId = this.pathToOperation.get(path);
-    const oldPathOperationId = oldPath ? this.pathToOperation.get(oldPath) : null;
+    const operationId = this.pathToOperation.get(normalizedPath);
+    const oldPathOperationId = normalizedOldPath ? this.pathToOperation.get(normalizedOldPath) : null;
 
     // 如果没有相关操作，允许处理
     if (!operationId && !oldPathOperationId) {
