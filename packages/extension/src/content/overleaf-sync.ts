@@ -229,16 +229,16 @@ export class OverleafWebSocketClient {
       // A new document was created in Overleaf
       console.log(`[Overleaf WS] 📢 ${message.name} received:`, message.args);
 
-      const docId = message.args[0] as string;
+      // Overleaf format: [parentFolderId, docObject, docType, rootFolderId]
+      // Similar to reciveNewFolder, the actual doc_id is in docObject._id
       const docInfo = message.args[1] as any;
-
-      // Try different formats for doc path/name
+      const docId = docInfo?._id;  // Real doc_id is in docObject._id
       const docPath = docInfo?.path || docInfo?.name || (typeof message.args[1] === 'string' ? message.args[1] : undefined);
       const docName = docInfo?.name || docPath || `doc_${docId}`;
 
       console.log(`[Overleaf WS] 📝 File created in Overleaf: ${docPath} (id: ${docId})`);
 
-      // Update docId mapping
+      // Update docId mapping with the correct doc_id
       if (docId && docPath) {
         this.docIdToPath.set(docId, {
           id: docId,

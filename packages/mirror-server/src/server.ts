@@ -3,7 +3,7 @@ import { Server as HttpServer } from 'http';
 import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { ClientConnection } from './client-connection';
 import { FileWatcher } from './filesystem/watcher';
-import { startFileSync, endFileSync } from './filesystem/watcher';
+import { startFileSync, endFileSync, startDirectorySync, endDirectorySync } from './filesystem/watcher';
 import { OverleafSyncManager } from './sync/overleaf-sync-manager';
 import { handleEditMonitor } from './handlers/edit-monitor';
 import { FileOperationHandler } from './handlers/file-operation';
@@ -623,9 +623,17 @@ export class MirrorServer {
         return;
       }
 
+      // 🔧 Create marker file BEFORE deleting (this signals FileWatcher to ignore the delete)
+      const syncId = startFileSync(projectId, projectConfig.localPath, filePath);
+      console.log('[Server] 📝 Created delete marker:', syncId);
+
       // 删除文件
       fs.unlinkSync(fullPath);
       console.log('[Server] ✅ Deleted file:', filePath);
+
+      // 🔧 Transition to AWAITING_ACK state (FileWatcher will ACK when it detects the delete)
+      endFileSync(syncId);
+      console.log('[Server] ⏳ Waiting for FileWatcher to acknowledge delete');
     } catch (error) {
       console.error('[Server] ❌ Failed to delete file:', filePath, error);
     }
@@ -662,9 +670,33 @@ export class MirrorServer {
         fs.mkdirSync(newDir, { recursive: true });
       }
 
+      // 🔧 FIX: Mark old file as being renamed (to prevent false delete detection)
+      const syncManager = this.syncManagers.get(projectId);
+      if (syncManager) {
+        syncManager.markRenaming(oldName);
+        console.log('[Server] 🔄 Marked old file as being renamed:', oldName);
+      }
+
+      // 🔧 Create marker file for NEW name BEFORE renaming
+      // This tells FileWatcher to ignore the rename when it detects the new file
+      const syncId = startFileSync(projectId, projectConfig.localPath, newName);
+      console.log('[Server] 📝 Created rename marker for new name:', newName, '(syncId:', syncId + ')');
+
       // 重命名文件
       fs.renameSync(oldPath, newPath);
       console.log('[Server] ✅ Renamed file:', oldName, '->', newName);
+
+      // 🔧 Transition to AWAITING_ACK state (FileWatcher will ACK when it detects the rename)
+      endFileSync(syncId);
+      console.log('[Server] ⏳ Waiting for FileWatcher to acknowledge rename');
+
+      // 🔧 Clear the renaming mark after a short delay (to ensure FileWatcher has time to detect)
+      setTimeout(() => {
+        if (syncManager) {
+          syncManager.clearRenaming(oldName);
+          console.log('[Server] ✅ Cleared renaming mark for:', oldName);
+        }
+      }, 2000); // 2 seconds should be enough for FileWatcher to detect
     } catch (error) {
       console.error('[Server] ❌ Failed to rename file:', oldName, '->', newName, error);
     }
@@ -695,6 +727,11 @@ export class MirrorServer {
         console.log('[Server] ⚠️ Old directory not found:', fullOldPath, '(skipping)');
         return;
       }
+
+      // 🔧 Create marker file for NEW path BEFORE stopping FileWatcher
+      // This tells FileWatcher to ignore the new directory when it restarts
+      const syncId = startDirectorySync(projectId, projectConfig.localPath, newPath);
+      console.log('[Server] 📝 Created directory rename marker for new path:', newPath, '(syncId:', syncId + ')');
 
       // 🔧 FIX: Stop FileWatcher temporarily to avoid Windows EPERM error
       const fileWatcher = this.fileWatchers.get(projectId);
@@ -740,6 +777,10 @@ export class MirrorServer {
           console.log(`[Server] ⚠️ No syncManager found for ${projectId}`);
         }
       }
+
+      // 🔧 Transition to AWAITING_ACK state (FileWatcher will ACK when it detects the new directory)
+      endDirectorySync(syncId);
+      console.log('[Server] ⏳ Waiting for FileWatcher to acknowledge directory rename');
     } catch (error) {
       console.error('[Server] ❌ Failed to rename directory:', oldPath, '->', newPath, error);
 
@@ -778,6 +819,10 @@ export class MirrorServer {
         return;
       }
 
+      // 🔧 Create marker file BEFORE deleting (this signals FileWatcher to ignore the delete)
+      const syncId = startDirectorySync(projectId, projectConfig.localPath, directoryPath);
+      console.log('[Server] 📝 Created directory delete marker:', syncId);
+
       // 递归删除文件夹及其内容
       fs.rmSync(fullPath, { recursive: true, force: true });
       console.log('[Server] ✅ Deleted directory:', directoryPath);
@@ -790,6 +835,10 @@ export class MirrorServer {
           console.log(`[Server] 📝 Removed docId mapping for deleted directory: ${directoryPath}`);
         }
       }
+
+      // 🔧 Transition to AWAITING_ACK state (FileWatcher will ACK when it detects the delete)
+      endDirectorySync(syncId);
+      console.log('[Server] ⏳ Waiting for FileWatcher to acknowledge directory delete');
     } catch (error) {
       console.error('[Server] ❌ Failed to delete directory:', directoryPath, error);
     }

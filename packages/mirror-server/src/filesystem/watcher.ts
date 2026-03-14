@@ -11,6 +11,7 @@ interface FileChangeEvent {
   type: 'create' | 'update' | 'delete' | 'rename';
   path: string;  // Relative to project directory path
   oldPath?: string;  // For rename operations
+  isDirectory?: boolean;  // True if this is a directory operation
 }
 
 type ChangeEventHandler = (event: FileChangeEvent) => void;
@@ -230,6 +231,34 @@ export class FileWatcher {
           });
         } else {
           console.log(`[FileWatcher] 🔇 Directory creation ignored (monitoring disabled): ${relativePath}`);
+        }
+      })
+      .on('unlinkDir', (path) => {
+        const relativePath = this.extractRelativePath(path);
+        console.log(`[FileWatcher] 🗑️📂 Directory removed: ${relativePath}`);
+
+        // Check if this directory is being synced by the server (marker file exists)
+        const syncId = isDirectoryBeingSynced(this.projectDir, relativePath);
+
+        if (syncId) {
+          console.log(`[FileWatcher] 🔇 Ignoring server directory deletion (marker file exists): ${relativePath}`);
+          console.log(`[FileWatcher] 📤 Sending ACK to complete directory sync operation: ${syncId}`);
+
+          // Send ACK to acknowledge that FileWatcher detected and ignored this change
+          acknowledgeDirectorySync(syncId);
+          return;
+        }
+
+        // Only trigger callback if monitoring is enabled
+        if (this.isWatching) {
+          console.log(`[FileWatcher] 📁 Directory deletion detected: ${relativePath}`);
+          this.onChangeCallback?.({
+            type: 'delete',
+            path: relativePath,
+            isDirectory: true
+          });
+        } else {
+          console.log(`[FileWatcher] 🔇 Directory deletion ignored (monitoring disabled): ${relativePath}`);
         }
       })
       .on('error', (error) => {

@@ -31,6 +31,7 @@ interface SyncToOverleafResponse {
 export class OverleafSyncManager {
   private pathToDocId = new Map<string, string>();
   private debounceTimer = new Map<string, NodeJS.Timeout>();
+  private renamingFiles = new Set<string>(); // Track files being renamed (old paths)
   private projectPath: string;
   private projectId: string;
   private wsClient: WebSocket | null = null;
@@ -117,6 +118,14 @@ export class OverleafSyncManager {
       console.log(`[OverleafSyncManager] 🔍 Normalized path: ${normalizedPath}`);
       if (normalizedOldPath) {
         console.log(`[OverleafSyncManager] 🔍 Normalized oldPath: ${normalizedOldPath}`);
+      }
+
+      // 🔧 FIX: If this is a delete event for a file that's being renamed, ignore it
+      // This prevents false delete detection during rename operations
+      if (event.type === 'delete' && this.renamingFiles.has(normalizedPath)) {
+        console.log(`[OverleafSyncManager] 🔇 Ignoring delete for file being renamed: ${normalizedPath}`);
+        this.renamingFiles.delete(normalizedPath); // Clear the mark
+        return;
       }
 
       let content: string | undefined;
@@ -246,5 +255,29 @@ export class OverleafSyncManager {
     const normalizedPath = this.normalizePath(path);
     this.pathToDocId.delete(normalizedPath);
     console.log(`[OverleafSyncManager] 🗑️ Removed mapping: ${normalizedPath}`);
+  }
+
+  /**
+   * Mark a file as being renamed (to prevent false delete detection)
+   * This should be called BEFORE starting the rename operation
+   *
+   * @param oldPath - The old path of the file being renamed
+   */
+  markRenaming(oldPath: string): void {
+    const normalizedPath = this.normalizePath(oldPath);
+    this.renamingFiles.add(normalizedPath);
+    console.log(`[OverleafSyncManager] 🔄 Marked as renaming: ${normalizedPath}`);
+  }
+
+  /**
+   * Clear the renaming mark for a file
+   * This should be called AFTER the rename operation is complete
+   *
+   * @param oldPath - The old path of the file that was renamed
+   */
+  clearRenaming(oldPath: string): void {
+    const normalizedPath = this.normalizePath(oldPath);
+    this.renamingFiles.delete(normalizedPath);
+    console.log(`[OverleafSyncManager] ✅ Cleared renaming mark: ${normalizedPath}`);
   }
 }
