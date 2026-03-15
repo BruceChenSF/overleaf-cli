@@ -10,6 +10,8 @@ interface SyncToOverleafMessage {
   oldPath?: string;
   content?: string;
   doc_id?: string;
+  folder_id?: string;  // For folder operations
+  isDirectory?: boolean;  // True if this is a folder operation
   timestamp: number;
 }
 
@@ -22,6 +24,8 @@ interface SyncToOverleafResponse {
   success: boolean;
   error?: string;
   doc_id?: string;
+  folder_id?: string;  // For folder operations
+  isDirectory?: boolean;  // True if this is a folder operation
   timestamp: number;
 }
 
@@ -64,6 +68,8 @@ export class OverleafAPIHandler {
     try {
       console.log(`[APIHandler] 📢 Received sync request: ${message.operation} ${message.path}`);
       console.log(`[APIHandler]    doc_id: ${message.doc_id || '(none)'}`);
+      console.log(`[APIHandler]    folder_id: ${message.folder_id || '(none)'}`);
+      console.log(`[APIHandler]    isDirectory: ${message.isDirectory || false}`);
       console.log(`[APIHandler]    content length: ${message.content?.length || 0}`);
       if (message.oldPath) {
         console.log(`[APIHandler]    oldPath: ${message.oldPath}`);
@@ -71,21 +77,39 @@ export class OverleafAPIHandler {
 
       let result: SyncToOverleafResponse;
 
-      switch (message.operation) {
-        case 'update':
-          result = await this.updateDocument(message);
-          break;
-        case 'create':
-          result = await this.createDocument(message);
-          break;
-        case 'delete':
-          result = await this.deleteDocument(message);
-          break;
-        case 'rename':
-          result = await this.renameDocument(message);
-          break;
-        default:
-          throw new Error(`Unknown operation: ${message.operation}`);
+      // Check if this is a directory operation
+      if (message.isDirectory) {
+        switch (message.operation) {
+          case 'create':
+            result = await this.createFolder(message);
+            break;
+          case 'delete':
+            result = await this.deleteFolder(message);
+            break;
+          case 'rename':
+            result = await this.renameFolder(message);
+            break;
+          default:
+            throw new Error(`Unknown directory operation: ${message.operation}`);
+        }
+      } else {
+        // File operations
+        switch (message.operation) {
+          case 'update':
+            result = await this.updateDocument(message);
+            break;
+          case 'create':
+            result = await this.createDocument(message);
+            break;
+          case 'delete':
+            result = await this.deleteDocument(message);
+            break;
+          case 'rename':
+            result = await this.renameDocument(message);
+            break;
+          default:
+            throw new Error(`Unknown operation: ${message.operation}`);
+        }
       }
 
       this.mirrorClient.send(result);
@@ -99,6 +123,7 @@ export class OverleafAPIHandler {
         operation: message.operation,
         path: message.path,
         oldPath: message.oldPath,
+        isDirectory: message.isDirectory,
         success: false,
         error: error instanceof Error ? error.message : String(error),
         timestamp: Date.now()
@@ -849,5 +874,147 @@ export class OverleafAPIHandler {
     // Click
     const clickEvent = new MouseEvent('click', eventOptions);
     element.dispatchEvent(clickEvent);
+  }
+
+  /**
+   * Create a folder - LOGGING ONLY VERSION
+   * TODO: Implement actual DOM manipulation after testing message flow
+   */
+  private async createFolderViaDOM(folderName: string): Promise<{ folderId: string; folderName: string }> {
+    console.log(`[APIHandler] 📁➕ [LOGGING ONLY] Would create folder: ${folderName}`);
+    console.log(`[APIHandler] ⚠️  TODO: Implement actual folder creation via DOM`);
+    console.log(`[APIHandler] ℹ️  For now, returning mock response to test message flow`);
+
+    // Return a mock folderId for testing
+    await this.sleep(100);
+
+    return { folderId: `mock-folder-${Date.now()}`, folderName };
+  }
+
+  /**
+   * Delete a folder - LOGGING ONLY VERSION
+   * TODO: Implement actual DOM manipulation after testing message flow
+   */
+  private async deleteFolderViaDOM(folderId: string, folderPath: string): Promise<void> {
+    console.log(`[APIHandler] 📁🗑️ [LOGGING ONLY] Would delete folder: ${folderPath}`);
+    console.log(`[APIHandler]    Folder ID: ${folderId}`);
+    console.log(`[APIHandler] ⚠️  TODO: Implement actual folder deletion via DOM`);
+    console.log(`[APIHandler] ℹ️  For now, just logging to test message flow`);
+
+    // Simulate some delay
+    await this.sleep(100);
+
+    console.log(`[APIHandler] ✅ [LOGGING ONLY] Folder delete logged: ${folderPath}`);
+  }
+
+  /**
+   * Rename a folder - LOGGING ONLY VERSION
+   * TODO: Implement actual DOM manipulation after testing message flow
+   */
+  private async renameFolderViaDOM(folderId: string, oldPath: string, newFolderName: string): Promise<void> {
+    console.log(`[APIHandler] 📁✏️ [LOGGING ONLY] Would rename folder: ${oldPath} -> ${newFolderName}`);
+    console.log(`[APIHandler]    Folder ID: ${folderId}`);
+    console.log(`[APIHandler] ⚠️  TODO: Implement actual folder rename via DOM`);
+    console.log(`[APIHandler] ℹ️  For now, just logging to test message flow`);
+
+    // Simulate some delay
+    await this.sleep(100);
+
+    console.log(`[APIHandler] ✅ [LOGGING ONLY] Folder rename logged: ${oldPath} -> ${newFolderName}`);
+  }
+
+  /**
+   * Handle folder create operation
+   */
+  private async createFolder(message: SyncToOverleafMessage): Promise<SyncToOverleafResponse> {
+    console.log(`[APIHandler] 📁➕ Creating folder: ${message.path}`);
+
+    // Extract folder name from path
+    const pathParts = message.path.split('/');
+    const folderName = pathParts.pop() || message.path;
+
+    try {
+      const result = await this.createFolderViaDOM(folderName);
+
+      return {
+        type: 'sync_to_overleaf_response',
+        project_id: this.projectId,
+        operation: 'create',
+        path: message.path,
+        success: true,
+        folder_id: result.folderId,
+        isDirectory: true,
+        timestamp: Date.now()
+      };
+    } catch (error) {
+      console.error(`[APIHandler] ❌ Create folder failed:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Handle folder delete operation
+   */
+  private async deleteFolder(message: SyncToOverleafMessage): Promise<SyncToOverleafResponse> {
+    if (!message.folder_id) {
+      throw new Error('folder_id is required for delete operation');
+    }
+
+    console.log(`[APIHandler] 📁🗑️ Deleting folder: ${message.path}`);
+
+    try {
+      await this.deleteFolderViaDOM(message.folder_id, message.path);
+
+      return {
+        type: 'sync_to_overleaf_response',
+        project_id: this.projectId,
+        operation: 'delete',
+        path: message.path,
+        success: true,
+        isDirectory: true,
+        timestamp: Date.now()
+      };
+    } catch (error) {
+      console.error(`[APIHandler] ❌ Delete folder failed:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Handle folder rename operation
+   */
+  private async renameFolder(message: SyncToOverleafMessage): Promise<SyncToOverleafResponse> {
+    if (!message.folder_id) {
+      throw new Error('folder_id is required for rename operation');
+    }
+
+    if (!message.oldPath) {
+      throw new Error('oldPath is required for rename operation');
+    }
+
+    console.log(`[APIHandler] 📁✏️ Renaming folder: ${message.oldPath} -> ${message.path}`);
+
+    // Extract new folder name from path
+    const pathParts = message.path.split('/');
+    const newFolderName = pathParts.pop() || message.path;
+
+    try {
+      await this.renameFolderViaDOM(message.folder_id, message.oldPath, newFolderName);
+
+      return {
+        type: 'sync_to_overleaf_response',
+        project_id: this.projectId,
+        operation: 'rename',
+        path: message.path,
+        oldPath: message.oldPath,
+        success: true,
+        folder_id: message.folder_id,
+        isDirectory: true,
+        timestamp: Date.now()
+      };
+    } catch (error) {
+      console.error(`[APIHandler] ❌ Rename folder failed:`, error);
+      throw error;
+    }
   }
 }

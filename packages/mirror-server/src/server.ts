@@ -591,15 +591,15 @@ export class MirrorServer {
       endDirectorySync(syncId);
       console.log('[Server] 🔓 Ended directory sync operation, waiting for FileWatcher ACK');
 
-      // 🔧 IMPORTANT: Update docId mapping if folderId is provided
+      // 🔧 IMPORTANT: Update folderId mapping if folderId is provided
       // This allows OverleafSyncManager to correctly track this folder
       if (folderId) {
         const syncManager = this.syncManagers.get(projectId);
         if (syncManager) {
-          syncManager.updateMapping(directoryPath, folderId);
-          console.log(`[Server] 📝 Updated docId mapping for directory: ${directoryPath} -> ${folderId}`);
+          syncManager.updateFolderMapping(directoryPath, folderId);
+          console.log(`[Server] 📝 Updated folderId mapping for directory: ${directoryPath} -> ${folderId}`);
         } else {
-          console.log(`[Server] ⚠️ No syncManager found for ${projectId}, mapping will be updated later`);
+          console.log(`[Server] ⚠️ No syncManager found for ${projectId}, folder mapping will be updated later`);
         }
       }
 
@@ -829,12 +829,12 @@ export class MirrorServer {
         }
       }
 
-      // 🔧 IMPORTANT: Update docId mapping if folderId is provided
+      // 🔧 IMPORTANT: Update folderId mapping if folderId is provided
       if (folderId) {
         const syncManager = this.syncManagers.get(projectId);
         if (syncManager) {
-          syncManager.updateMapping(newPath, folderId);
-          console.log(`[Server] 📝 Updated docId mapping for renamed directory: ${newPath} -> ${folderId}`);
+          syncManager.updateFolderMapping(newPath, folderId);
+          console.log(`[Server] 📝 Updated folderId mapping for renamed directory: ${newPath} -> ${folderId}`);
         } else {
           console.log(`[Server] ⚠️ No syncManager found for ${projectId}`);
         }
@@ -910,12 +910,12 @@ export class MirrorServer {
       fs.rmSync(fullPath, { recursive: true, force: true });
       console.log('[Server] ✅ Deleted directory:', directoryPath);
 
-      // 🔧 Remove from docId mapping
+      // 🔧 Remove from folderId mapping
       if (folderId) {
         const syncManager = this.syncManagers.get(projectId);
         if (syncManager) {
-          syncManager.removeMapping(directoryPath);
-          console.log(`[Server] 📝 Removed docId mapping for deleted directory: ${directoryPath}`);
+          syncManager.removeFolderMapping(directoryPath);
+          console.log(`[Server] 📝 Removed folderId mapping for deleted directory: ${directoryPath}`);
         }
       }
 
@@ -928,11 +928,6 @@ export class MirrorServer {
       };
       endDirectorySync(syncId, onCompleteCallback);
       console.log('[Server] ⏳ Waiting for FileWatcher to acknowledge directory delete before completing operation...');
-
-      // OLD: Marker mechanism (kept for rollback safety - Phase 3 will remove this)
-      // 🔧 Transition to AWAITING_ACK state (FileWatcher will ACK when it detects the delete)
-      endDirectorySync(syncId);
-      console.log('[Server] ⏳ Waiting for FileWatcher to acknowledge directory delete');
     } catch (error) {
       console.error('[Server] ❌ Failed to delete directory:', directoryPath, error);
       // NEW: SyncOrchestrator - Mark operation as failed
@@ -1044,9 +1039,17 @@ export class MirrorServer {
     console.log(`[Server] 🔧 Creating OverleafSyncManager...`);
     const syncManager = new OverleafSyncManager(projectId, this.config.port);
 
+    // NEW: Set orchestrator reference
+    syncManager.setOrchestrator(this.orchestrator);
+    console.log(`[Server] ✅ SyncOrchestrator linked to syncManager`);
+
     // Initialize mappings
     console.log(`[Server] 🔧 Initializing ${docIdToPath.size} mappings...`);
     syncManager.initializeMappings(docIdToPath);
+
+    // TODO: Initialize folder mappings when folder information is available
+    // This will be implemented when we have folder_id information from the initial sync
+    // syncManager.initializeFolderMappings(folderIdToPath);
 
     // Set up callback
     console.log(`[Server] 🔧 Registering file change callback...`);
@@ -1100,7 +1103,9 @@ export class MirrorServer {
    * @private
    */
   private handleSyncResponse(message: any): void {
-    const { project_id, success, operation, path, doc_id, error } = message;
+    const { project_id, success, operation, path, oldPath, doc_id, folder_id, isDirectory, error } = message;
+
+    console.log(`[Server] 📨 Received sync response: ${operation} ${path} (success: ${success}, isDirectory: ${isDirectory})`);
 
     const syncManager = this.syncManagers.get(project_id);
     if (!syncManager) {
@@ -1108,15 +1113,13 @@ export class MirrorServer {
       return;
     }
 
-    if (success) {
-      console.log(`[Server] ✅ Sync to Overleaf successful: ${operation} ${path}`);
-
-      // Update mapping for create operations
-      if (operation === 'create' && doc_id) {
-        syncManager.updateMapping(path, doc_id);
-      }
-    } else {
-      console.error(`[Server] ❌ Sync to Overleaf failed: ${operation} ${path} - ${error}`);
+    // Forward the complete response to OverleafSyncManager for proper handling
+    // This ensures folder_id, isDirectory, and orchestrator completion are all handled correctly
+    try {
+      syncManager.handleServerSyncResponse(message as any);
+      console.log(`[Server] ✅ Forwarded response to OverleafSyncManager`);
+    } catch (err) {
+      console.error(`[Server] ❌ Error forwarding response to OverleafSyncManager:`, err);
     }
   }
 

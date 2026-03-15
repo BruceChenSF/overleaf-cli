@@ -13,6 +13,8 @@ interface SyncToOverleafMessage {
   oldPath?: string;
   content?: string;
   doc_id?: string;
+  folder_id?: string;  // For folder operations
+  isDirectory?: boolean;  // True if this is a folder operation
   timestamp: number;
 }
 
@@ -25,16 +27,20 @@ interface SyncToOverleafResponse {
   success: boolean;
   error?: string;
   doc_id?: string;
+  folder_id?: string;  // For folder operations
+  isDirectory?: boolean;  // True if this is a folder operation
   timestamp: number;
 }
 
 export class OverleafSyncManager {
   private pathToDocId = new Map<string, string>();
+  private pathToFolderId = new Map<string, string>(); // Track folder IDs
   private debounceTimer = new Map<string, NodeJS.Timeout>();
   private renamingFiles = new Set<string>(); // Track files being renamed (old paths)
   private projectPath: string;
   private projectId: string;
   private wsClient: WebSocket | null = null;
+  private orchestrator: any; // SyncOrchestrator instance (will be set from server)
 
   /**
    * Normalize path to use forward slashes (Overleaf format)
@@ -76,6 +82,16 @@ export class OverleafSyncManager {
     }
   }
 
+  /**
+   * Public method to handle sync response from server
+   * Called when server receives response from browser extension
+   *
+   * @param response - Sync response message
+   */
+  handleServerSyncResponse(response: SyncToOverleafResponse): void {
+    this.handleSyncResponse(response);
+  }
+
   initializeMappings(docIdToPath: Map<string, { path: string }>): void {
     console.log(`[OverleafSyncManager] Initializing ${docIdToPath.size} mappings`);
 
@@ -88,8 +104,40 @@ export class OverleafSyncManager {
     console.log(`[OverleafSyncManager] ✅ Initialized path → docId mappings`);
   }
 
+  initializeFolderMappings(folderIdToPath: Map<string, { path: string }>): void {
+    console.log(`[OverleafSyncManager] Initializing ${folderIdToPath.size} folder mappings`);
+
+    this.pathToFolderId.clear();
+
+    folderIdToPath.forEach((info, folderId) => {
+      this.pathToFolderId.set(info.path, folderId);
+    });
+
+    console.log(`[OverleafSyncManager] ✅ Initialized path → folderId mappings`);
+  }
+
+  setOrchestrator(orchestrator: any): void {
+    this.orchestrator = orchestrator;
+    console.log(`[OverleafSyncManager] ✅ SyncOrchestrator linked`);
+  }
+
   async handleFileChange(event: FileChangeEvent): Promise<void> {
-    // Clear existing timer
+    // Check if this is a directory event
+    const isDirectory = event.isDirectory === true;
+
+    console.log(`[OverleafSyncManager] 📁 File change detected: ${event.type} ${event.path} (isDirectory: ${isDirectory})`);
+
+    // For directory operations, sync immediately without debounce
+    if (isDirectory) {
+      try {
+        await this.syncDirectoryToOverleaf(event);
+      } catch (error) {
+        console.error(`[OverleafSyncManager] ❌ Error in syncDirectoryToOverleaf:`, error);
+      }
+      return;
+    }
+
+    // For file operations, use debounce as before
     if (this.debounceTimer.has(event.path)) {
       clearTimeout(this.debounceTimer.get(event.path)!);
     }
@@ -194,37 +242,163 @@ export class OverleafSyncManager {
     }
   }
 
+  private async syncDirectoryToOverleaf(event: FileChangeEvent): Promise<void> {
+    try {
+      console.log(`[OverleafSyncManager] 📁 Syncing directory to Overleaf: ${event.type} ${event.path}`);
+
+      // 🔧 Normalize path to forward slashes for consistent matching
+      const normalizedPath = this.normalizePath(event.path);
+      const normalizedOldPath = event.oldPath ? this.normalizePath(event.oldPath) : undefined;
+
+      console.log(`[OverleafSyncManager] 🔍 Normalized directory path: ${normalizedPath}`);
+      if (normalizedOldPath) {
+        console.log(`[OverleafSyncManager] 🔍 Normalized old directory path: ${normalizedOldPath}`);
+      }
+
+      // NEW: SyncOrchestrator - Start tracking directory operation
+      let operation: 'update' | 'create' | 'delete' | 'rename';
+      let folderId: string | undefined;
+
+      if (this.orchestrator) {
+        const filterResult = this.orchestrator.shouldProcessEvent('local', event.type, normalizedPath, normalizedOldPath);
+        if (!filterResult.shouldProcess) {
+          console.log(`[OverleafSyncManager] 🔒 Event blocked by SyncOrchestrator: ${filterResult.reason}`);
+          return;
+        }
+      }
+
+      // Determine operation type and folder ID
+      if (event.type === 'delete') {
+        operation = 'delete';
+        folderId = this.pathToFolderId.get(normalizedPath);
+        console.log(`[OverleafSyncManager] 🗑️ Directory delete, folderId: ${folderId || '(none)'}`);
+      } else if (event.type === 'rename') {
+        operation = 'rename';
+        folderId = normalizedOldPath ? this.pathToFolderId.get(normalizedOldPath) : undefined;
+        console.log(`[OverleafSyncManager] 📝 Directory renamed: ${normalizedOldPath} -> ${normalizedPath}, folderId: ${folderId || '(none)'}`);
+      } else if (this.pathToFolderId.has(normalizedPath)) {
+        operation = 'update';
+        folderId = this.pathToFolderId.get(normalizedPath);
+        console.log(`[OverleafSyncManager] 📝 Found folderId for ${normalizedPath}: ${folderId}, using UPDATE`);
+      } else {
+        operation = 'create';
+        console.log(`[OverleafSyncManager] ➕ No folderId for ${normalizedPath}, using CREATE`);
+      }
+
+      // NEW: SyncOrchestrator - Start tracking operation
+      let opContext: any = null;
+      if (this.orchestrator) {
+        opContext = this.orchestrator.startOperation(
+          'local',
+          operation,
+          normalizedPath,
+          normalizedOldPath,
+          { isDirectory: true }
+        );
+        console.log(`[OverleafSyncManager] 🎯 Started operation tracking: ${opContext.operationId}`);
+      }
+
+      // Send message to extension with isDirectory flag
+      const message: SyncToOverleafMessage = {
+        type: 'sync_to_overleaf',
+        project_id: this.projectId,
+        operation,
+        path: normalizedPath,
+        oldPath: normalizedOldPath,
+        folder_id: folderId,
+        isDirectory: true,
+        timestamp: Date.now()
+      };
+
+      if (this.wsClient && this.wsClient.readyState === WebSocket.OPEN) {
+        this.wsClient.send(JSON.stringify(message));
+        console.log(`[OverleafSyncManager] ✅ Sent directory sync request: ${operation} ${normalizedPath}`);
+      } else {
+        console.warn('[OverleafSyncManager] ⚠️ WebSocket not connected');
+        // Fail the operation if WebSocket is not connected
+        if (this.orchestrator && opContext) {
+          this.orchestrator.failOperation(opContext.operationId, new Error('WebSocket not connected'));
+        }
+      }
+    } catch (error) {
+      console.error(`[OverleafSyncManager] ❌ Failed to sync directory ${event.path}:`, error);
+    }
+  }
+
   private handleSyncResponse(response: SyncToOverleafResponse): void {
     if (response.success) {
       console.log(`[OverleafSyncManager] ✅ Sync successful: ${response.operation} ${response.path}`);
 
-      // Update mapping (create operation)
-      if (response.operation === 'create' && response.doc_id) {
-        this.pathToDocId.set(response.path, response.doc_id);
-        console.log(`[OverleafSyncManager] ✅ Mapped ${response.path} → ${response.doc_id}`);
-      }
+      // Check if this is a directory operation
+      const isDirectory = response.isDirectory === true;
 
-      // Delete mapping (delete operation)
-      if (response.operation === 'delete') {
-        this.pathToDocId.delete(response.path);
-        console.log(`[OverleafSyncManager] ✅ Unmapped ${response.path}`);
-      }
+      if (isDirectory) {
+        // Handle folder mapping updates
+        if (response.operation === 'create' && response.folder_id) {
+          this.pathToFolderId.set(response.path, response.folder_id);
+          console.log(`[OverleafSyncManager] ✅ Mapped folder ${response.path} → ${response.folder_id}`);
+        }
 
-      // Update mapping (rename operation)
-      if (response.operation === 'rename' && response.oldPath) {
-        const docId = this.pathToDocId.get(response.oldPath);
-        if (docId) {
-          this.pathToDocId.delete(response.oldPath);
-          this.pathToDocId.set(response.path, docId);
-          console.log(`[OverleafSyncManager] ✅ Remapped ${response.oldPath} → ${response.path} (${docId})`);
-        } else {
-          console.warn(`[OverleafSyncManager] ⚠️ Rename succeeded but no docId found for ${response.oldPath}`);
+        if (response.operation === 'delete') {
+          this.pathToFolderId.delete(response.path);
+          console.log(`[OverleafSyncManager] ✅ Unmapped folder ${response.path}`);
+        }
+
+        if (response.operation === 'rename' && response.oldPath) {
+          const folderId = this.pathToFolderId.get(response.oldPath);
+          if (folderId) {
+            this.pathToFolderId.delete(response.oldPath);
+            this.pathToFolderId.set(response.path, folderId);
+            console.log(`[OverleafSyncManager] ✅ Remapped folder ${response.oldPath} → ${response.path} (${folderId})`);
+          } else {
+            console.warn(`[OverleafSyncManager] ⚠️ Folder rename succeeded but no folderId found for ${response.oldPath}`);
+          }
+        }
+
+        // NEW: SyncOrchestrator - Complete operation for directories
+        if (this.orchestrator) {
+          const opContext = this.orchestrator.getOperationForPath(response.path);
+          if (opContext) {
+            this.orchestrator.completeOperation(opContext.operationId);
+            console.log(`[OverleafSyncManager] ✅ Completed directory operation: ${opContext.operationId}`);
+          }
+        }
+      } else {
+        // Handle file mapping updates (existing logic)
+        if (response.operation === 'create' && response.doc_id) {
+          this.pathToDocId.set(response.path, response.doc_id);
+          console.log(`[OverleafSyncManager] ✅ Mapped ${response.path} → ${response.doc_id}`);
+        }
+
+        if (response.operation === 'delete') {
+          this.pathToDocId.delete(response.path);
+          console.log(`[OverleafSyncManager] ✅ Unmapped ${response.path}`);
+        }
+
+        if (response.operation === 'rename' && response.oldPath) {
+          const docId = this.pathToDocId.get(response.oldPath);
+          if (docId) {
+            this.pathToDocId.delete(response.oldPath);
+            this.pathToDocId.set(response.path, docId);
+            console.log(`[OverleafSyncManager] ✅ Remapped ${response.oldPath} → ${response.path} (${docId})`);
+          } else {
+            console.warn(`[OverleafSyncManager] ⚠️ Rename succeeded but no docId found for ${response.oldPath}`);
+          }
         }
       }
     } else {
       console.error(`[OverleafSyncManager] ❌ Sync failed: ${response.operation} ${response.path}`);
       if (response.error) {
         console.error(`[OverleafSyncManager] Error: ${response.error}`);
+      }
+
+      // NEW: SyncOrchestrator - Fail operation on error
+      if (this.orchestrator) {
+        const opContext = this.orchestrator.getOperationForPath(response.path);
+        if (opContext) {
+          this.orchestrator.failOperation(opContext.operationId, new Error(response.error || 'Sync failed'));
+          console.log(`[OverleafSyncManager] ❌ Failed operation: ${opContext.operationId}`);
+        }
       }
     }
   }
@@ -279,5 +453,39 @@ export class OverleafSyncManager {
     const normalizedPath = this.normalizePath(oldPath);
     this.renamingFiles.delete(normalizedPath);
     console.log(`[OverleafSyncManager] ✅ Cleared renaming mark: ${normalizedPath}`);
+  }
+
+  /**
+   * Update folder mapping (used when folder is created from Overleaf side)
+   *
+   * @param path - Folder path
+   * @param folderId - Overleaf folder ID
+   */
+  updateFolderMapping(path: string, folderId: string): void {
+    const normalizedPath = this.normalizePath(path);
+    this.pathToFolderId.set(normalizedPath, folderId);
+    console.log(`[OverleafSyncManager] ✅ Updated folder mapping: ${normalizedPath} → ${folderId}`);
+  }
+
+  /**
+   * Remove folder mapping (used when folder is deleted from Overleaf side)
+   *
+   * @param path - Folder path
+   */
+  removeFolderMapping(path: string): void {
+    const normalizedPath = this.normalizePath(path);
+    this.pathToFolderId.delete(normalizedPath);
+    console.log(`[OverleafSyncManager] 🗑️ Removed folder mapping: ${normalizedPath}`);
+  }
+
+  /**
+   * Get folder ID for a path
+   *
+   * @param path - Folder path
+   * @returns Folder ID or undefined
+   */
+  getFolderId(path: string): string | undefined {
+    const normalizedPath = this.normalizePath(path);
+    return this.pathToFolderId.get(normalizedPath);
   }
 }

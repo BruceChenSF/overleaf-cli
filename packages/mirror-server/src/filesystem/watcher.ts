@@ -35,7 +35,9 @@ export class FileWatcher {
   private onChangeCallback?: ChangeEventHandler;
   private projectDir: string;
   private pendingDeletes = new Map<string, PendingDelete>();
+  private pendingDirDeletes = new Map<string, PendingDelete>(); // NEW: Track pending directory deletes for rename detection
   private readonly RENAME_DETECTION_WINDOW = 3000; // 3 second window to detect renames (increased for Windows)
+  private readonly DIR_RENAME_DETECTION_WINDOW = 2000; // 2 second window for directory renames (directories rename faster)
   private fileSizes = new Map<string, number>(); // Track file sizes for rename detection
   private isWatching = false; // Track whether monitoring is enabled
   private orchestrator?: SyncOrchestrator; // NEW: SyncOrchestrator for event filtering
@@ -247,13 +249,58 @@ export class FileWatcher {
           return;
         }
 
-        // Only trigger callback if monitoring is enabled
+        // NEW: Check if this is a rename (directory was recently deleted)
         if (this.isWatching) {
-          console.log(`[FileWatcher] 📁 Directory creation detected: ${relativePath}`);
-          this.onChangeCallback?.({
-            type: 'create',
-            path: relativePath
-          });
+          console.log(`[FileWatcher] 🔍 Checking for directory rename...`);
+
+          // Check all pending directory deletes to see if any match this add
+          let matchedDelete: { path: string; info: PendingDelete } | null = null;
+
+          for (const [deletedPath, deleteInfo] of this.pendingDirDeletes.entries()) {
+            const timeDiff = Date.now() - deleteInfo.timestamp;
+
+            // Check if within rename detection window
+            if (timeDiff <= this.DIR_RENAME_DETECTION_WINDOW) {
+              console.log(`[FileWatcher] 🔍 Found pending delete: ${deletedPath} (${timeDiff}ms ago)`);
+
+              // Check if the paths are similar (only last component differs)
+              // This is a simple heuristic - could be improved
+              const oldParts = deletedPath.split('/');
+              const newParts = relativePath.split('/');
+
+              // Check if all parts except the last are the same
+              const oldParent = oldParts.slice(0, -1).join('/');
+              const newParent = newParts.slice(0, -1).join('/');
+
+              if (oldParent === newParent && oldParts.length === newParts.length) {
+                console.log(`[FileWatcher] ✅ Detected directory rename: ${deletedPath} -> ${relativePath}`);
+                matchedDelete = { path: deletedPath, info: deleteInfo };
+                break;
+              }
+            }
+          }
+
+          if (matchedDelete) {
+            // Remove from pending deletes
+            this.pendingDirDeletes.delete(matchedDelete.path);
+
+            // Trigger rename event
+            console.log(`[FileWatcher] 📝✅ Directory rename detected: ${matchedDelete.path} -> ${relativePath}`);
+            this.onChangeCallback?.({
+              type: 'rename',
+              path: relativePath,
+              oldPath: matchedDelete.path,
+              isDirectory: true
+            });
+          } else {
+            // No matching delete found, treat as create
+            console.log(`[FileWatcher] 📁 Directory creation detected: ${relativePath}`);
+            this.onChangeCallback?.({
+              type: 'create',
+              path: relativePath,
+              isDirectory: true
+            });
+          }
         } else {
           console.log(`[FileWatcher] 🔇 Directory creation ignored (monitoring disabled): ${relativePath}`);
         }
@@ -274,14 +321,30 @@ export class FileWatcher {
           return;
         }
 
-        // Only trigger callback if monitoring is enabled
+        // NEW: Store directory deletion for rename detection (similar to file rename detection)
+        // Don't immediately trigger delete - wait to see if a corresponding addDir happens
         if (this.isWatching) {
-          console.log(`[FileWatcher] 📁 Directory deletion detected: ${relativePath}`);
-          this.onChangeCallback?.({
-            type: 'delete',
+          console.log(`[FileWatcher] 📁 Storing directory deletion for rename detection: ${relativePath}`);
+          this.pendingDirDeletes.set(relativePath, {
             path: relativePath,
-            isDirectory: true
+            timestamp: Date.now()
           });
+
+          // Set timeout to clear pending delete if no matching addDir occurs
+          setTimeout(() => {
+            const pending = this.pendingDirDeletes.get(relativePath);
+            if (pending && Date.now() - pending.timestamp >= this.DIR_RENAME_DETECTION_WINDOW) {
+              console.log(`[FileWatcher] 🗑️ Directory deletion timeout (no rename detected): ${relativePath}`);
+              this.pendingDirDeletes.delete(relativePath);
+
+              // Trigger delete event
+              this.onChangeCallback?.({
+                type: 'delete',
+                path: relativePath,
+                isDirectory: true
+              });
+            }
+          }, this.DIR_RENAME_DETECTION_WINDOW + 500); // Add 500ms buffer
         } else {
           console.log(`[FileWatcher] 🔇 Directory deletion ignored (monitoring disabled): ${relativePath}`);
         }
@@ -294,6 +357,11 @@ export class FileWatcher {
 
         // 🔧 Initialize file sizes for all existing files
         await this.initializeFileSizes();
+
+        // 🔧 IMPORTANT: Enable monitoring after watcher is ready
+        // This prevents initial file scan from triggering false events
+        this.isWatching = true;
+        console.log(`[FileWatcher] ✅ Monitoring enabled - directory events will now be processed`);
       });
 
     console.log(`[FileWatcher] ✅ Event listeners registered`);
@@ -306,6 +374,7 @@ export class FileWatcher {
     if (this.watcher) {
       this.watcher.close();
       this.watcher = null;
+      this.isWatching = false; // 🔧 Disable monitoring
       console.log('[FileWatcher] Stopped watching');
     }
   }
