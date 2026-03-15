@@ -10,6 +10,7 @@
 
 const SYNC_ID_KEY = '__overleaf_cc_sync_id__';
 const SYNC_TIMEOUT = 10000; // 10 seconds
+const CURRENT_DOC_ID_KEY = '__overleaf_cc_current_doc_id__';
 
 /**
  * Generate a unique sync ID
@@ -19,6 +20,38 @@ function generateSyncId(): string {
 }
 
 export class EditorUpdater {
+  private static initialized = false;
+
+  /**
+   * Initialize the EditorUpdater
+   * This sets up event listeners for joinDoc events
+   */
+  static initialize() {
+    if (this.initialized) {
+      console.log('[EditorUpdater] ℹ️ Already initialized');
+      return;
+    }
+
+    console.log('[EditorUpdater] 🚀 Initializing...');
+
+    // Listen for joinDoc events from EditMonitorBridge
+    window.addEventListener('message', (event) => {
+      // Security check: only accept messages from same origin
+      if (event.source !== window) return;
+
+      if (event.data.type === 'OVERLEAF_CC_JOIN_DOC') {
+        const docId = event.data.data?.doc_id;
+        if (docId) {
+          console.log(`[EditorUpdater] 📄 joinDoc event received, setting current docId: ${docId}`);
+          (window as any)[CURRENT_DOC_ID_KEY] = docId;
+        }
+      }
+    });
+
+    this.initialized = true;
+    console.log('[EditorUpdater] ✅ Initialized');
+  }
+
   /**
    * Update document content in Overleaf editor
    *
@@ -40,37 +73,20 @@ export class EditorUpdater {
     if (currentDocId !== docId) {
       console.log(`[EditorUpdater] 📂 Target document not open, switching...`);
 
-      // 🔥 IMPORTANT: Set up event listener BEFORE clicking the file
-      // Otherwise the joinDoc event might fire before we're listening
-      const joinDocPromise = this.waitForJoinDocEvent(docId);
+      // Wait for document to be open and editor to be ready
+      const isOpened = await this.ensureDocumentOpened(docId);
 
-      // Try to switch by docId first (most reliable)
-      try {
-        await this.switchToDocumentById(docId);
-      } catch (error) {
-        console.log(`[EditorUpdater] ⚠️ Could not switch by docId, trying by file name...`);
-        // Fallback: switch by file name
-        await this.switchToDocumentByFileName(docId);
-      }
-
-      // Wait for joinDoc event
-      console.log(`[EditorUpdater] ⏳ Waiting for joinDoc event...`);
-      await joinDocPromise;
-
-      // 🔥 IMPORTANT: Wait for CodeMirror to be truly ready
-      // This actively checks the editor state instead of using a fixed delay
-      console.log(`[EditorUpdater] ⏳ Waiting for CodeMirror to be ready...`);
-      const isReady = await this.waitForEditorReady();
-
-      if (!isReady) {
-        throw new Error('CodeMirror editor failed to initialize after document switch');
+      if (!isOpened) {
+        throw new Error(`Failed to open document: ${docId}`);
       }
     }
 
     // Step 2: Find the CodeMirror 6 content element
+    console.log(`[EditorUpdater] 🔍 Looking for .cm-content element...`);
     const cmContent = document.querySelector('.cm-content');
 
     if (!cmContent) {
+      console.error(`[EditorUpdater] ❌ .cm-content not found!`);
       throw new Error('CodeMirror editor not found');
     }
 
@@ -196,8 +212,15 @@ export class EditorUpdater {
    * Get the current open document ID
    */
   private getCurrentDocId(): string | null {
+    // Method 1: Check the recorded docId from joinDoc events
+    const recordedDocId = (window as any)[CURRENT_DOC_ID_KEY];
+    if (recordedDocId) {
+      console.log(`[EditorUpdater] 🔍 Current docId from joinDoc event: ${recordedDocId}`);
+      return recordedDocId;
+    }
+
+    // Method 2: Try documentManager (older Overleaf versions)
     try {
-      // Method 1: Try documentManager (older Overleaf versions)
       const currentDoc = (window as any).editor?.documentManager?.getCurrentDoc();
       if (currentDoc?._id) {
         console.log(`[EditorUpdater] 🔍 Current docId from documentManager: ${currentDoc._id}`);
@@ -207,8 +230,8 @@ export class EditorUpdater {
       // Ignore errors
     }
 
+    // Method 3: Try from React state / editor store (newer Overleaf versions)
     try {
-      // Method 2: Try from React state / editor store (newer Overleaf versions)
       const editorState = (window as any).__overleaf_editor_state__;
       if (editorState?.doc_id) {
         console.log(`[EditorUpdater] 🔍 Current docId from __overleaf_editor_state__: ${editorState.doc_id}`);
@@ -218,8 +241,8 @@ export class EditorUpdater {
       // Ignore errors
     }
 
+    // Method 4: Extract from URL (doesn't work with new Overleaf UI)
     try {
-      // Method 3: Extract from URL
       const urlMatch = window.location.href.match(/doc\/([a-f0-9]{24})/);
       if (urlMatch && urlMatch[1]) {
         console.log(`[EditorUpdater] 🔍 Current docId from URL: ${urlMatch[1]}`);
@@ -231,6 +254,56 @@ export class EditorUpdater {
 
     console.log(`[EditorUpdater] 🔍 Current docId: null (no method found)`);
     return null;
+  }
+
+  /**
+   * Ensure document is opened and editor is ready
+   * This method checks if the document is already open (by URL) and opens it if not
+   *
+   * @param docId - Document ID to open
+   * @returns true if document is open and editor is ready
+   */
+  private async ensureDocumentOpened(docId: string): Promise<boolean> {
+    console.log(`[EditorUpdater] 🔔 Ensuring document is opened: ${docId}`);
+
+    // Check if document is already open by inspecting URL
+    const urlMatch = window.location.href.match(/doc\/([a-f0-9]{24})/);
+    const currentDocIdFromUrl = urlMatch ? urlMatch[1] : null;
+
+    if (currentDocIdFromUrl === docId) {
+      console.log(`[EditorUpdater] ✅ Document already open (from URL): ${docId}`);
+    } else {
+      console.log(`[EditorUpdater] 📂 Document not open, switching... (current: ${currentDocIdFromUrl}, target: ${docId})`);
+
+      // Set up event listener BEFORE clicking the file
+      const joinDocPromise = this.waitForJoinDocEvent(docId, 10000);
+
+      // Try to switch by docId first (most reliable)
+      try {
+        await this.switchToDocumentById(docId);
+      } catch (error) {
+        console.log(`[EditorUpdater] ⚠️ Could not switch by docId, trying by file name...`);
+        // Fallback: switch by file name
+        await this.switchToDocumentByFileName(docId);
+      }
+
+      // Wait for joinDoc event
+      console.log(`[EditorUpdater] ⏳ Waiting for joinDoc event...`);
+      await joinDocPromise;
+      console.log(`[EditorUpdater] ✅ joinDoc event received`);
+    }
+
+    // Wait for CodeMirror to be truly ready
+    console.log(`[EditorUpdater] ⏳ Waiting for CodeMirror to be ready...`);
+    const isReady = await this.waitForEditorReady();
+
+    if (!isReady) {
+      console.error(`[EditorUpdater] ❌ CodeMirror editor failed to initialize`);
+      return false;
+    }
+
+    console.log(`[EditorUpdater] ✅ Document opened and editor ready`);
+    return true;
   }
 
   /**
@@ -342,8 +415,10 @@ export class EditorUpdater {
     // Click the file to switch to it
     fileElement.click();
 
-    // Wait a bit for the click to take effect
-    await this.sleep(500);
+    // Wait for the click to take effect and Overleaf to send joinDoc event
+    // For newly created files, Overleaf may need more time to complete the switch
+    // especially if it just auto-joined and left the document during creation
+    await this.sleep(1500);
   }
 
   /**
@@ -391,6 +466,23 @@ export class EditorUpdater {
         }
       };
 
+      // 🔧 NEW: Check if document is already open (handles the case where Overleaf auto-joined during file creation)
+      const checkIfAlreadyOpen = () => {
+        const currentDocId = this.getCurrentDocId();
+        if (currentDocId === targetDocId) {
+          console.log(`[EditorUpdater] ✅ Document already open: ${targetDocId}`);
+          cleanup();
+          resolve();
+          return true;
+        }
+        return false;
+      };
+
+      // Check immediately
+      if (checkIfAlreadyOpen()) {
+        return;
+      }
+
       // Set up timeout
       const timeoutId = setTimeout(() => {
         cleanup();
@@ -424,6 +516,21 @@ export class EditorUpdater {
 
       // Add event listener
       window.addEventListener('message', eventListener);
+
+      // 🔧 NEW: Poll for document being already open (handles race conditions)
+      // Check every 100ms for the first 1 second
+      let pollCount = 0;
+      const maxPolls = 10; // 1 second total (10 * 100ms)
+      const pollInterval = setInterval(() => {
+        pollCount++;
+        if (checkIfAlreadyOpen()) {
+          clearInterval(pollInterval);
+          clearTimeout(timeoutId);
+        } else if (pollCount >= maxPolls) {
+          clearInterval(pollInterval);
+          // Continue waiting for event or timeout
+        }
+      }, 100);
     });
   }
 

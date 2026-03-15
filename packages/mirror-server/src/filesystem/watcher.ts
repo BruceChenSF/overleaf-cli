@@ -830,14 +830,53 @@ export function startDirectorySync(
   // Marker file is placed INSIDE the directory being created
   const markerFilePath = join(projectDir, normalizedPath, markerFileName);
 
-  // Create marker file (this is a clear signal that we're creating this directory)
   const fs = require('fs');
 
-  // Ensure the directory exists first (we'll create it if it doesn't)
-  if (!fs.existsSync(join(projectDir, normalizedPath))) {
-    fs.mkdirSync(join(projectDir, normalizedPath), { recursive: true });
+  // 🔧 FIX: When creating nested directories, we need to ensure ALL parent directories
+  // that will be created have marker files to prevent FileWatcher from triggering events.
+  // We create directories one level at a time (from outermost to innermost) and add
+  // marker files immediately after each directory is created.
+  const parentSyncIds: string[] = [];
+  const pathParts = normalizedPath.split(path.sep);
+  let currentPath = '';
+
+  for (let i = 0; i < pathParts.length; i++) {
+    currentPath = currentPath ? path.join(currentPath, pathParts[i]) : pathParts[i];
+    const fullPath = join(projectDir, currentPath);
+
+    // Check if this directory doesn't exist yet
+    if (!fs.existsSync(fullPath)) {
+      // Create this directory (non-recursive, since we're iterating level by level)
+      fs.mkdirSync(fullPath, { recursive: false });
+
+      // Create marker file immediately after directory creation
+      const partDirName = pathParts[i];
+      const partMarkerFileName = `.${partDirName}.syncing`;
+      const partMarkerFilePath = join(fullPath, partMarkerFileName);
+
+      const parentSyncId = generateSyncId();
+      fs.writeFileSync(partMarkerFilePath, parentSyncId, 'utf8');
+      parentSyncIds.push(parentSyncId);
+
+      // Create a sync operation for this directory
+      const parentSyncOperation: SyncOperation = {
+        syncId: parentSyncId,
+        projectId,
+        filePath: currentPath,
+        markFilePath: partMarkerFilePath,
+        state: SyncState.PENDING,
+        createdAt: Date.now(),
+        onComplete: undefined  // Parent directories don't need completion callbacks
+      };
+
+      activeSyncs.set(parentSyncId, parentSyncOperation);
+      filePathToSyncId.set(currentPath, parentSyncId);
+
+      console.log(`[startDirectorySync] 🔧 Created directory ${currentPath} with marker (syncId: ${parentSyncId})`);
+    }
   }
 
+  // Ensure the target directory has the correct marker file (in case it already existed)
   fs.writeFileSync(markerFilePath, syncId, 'utf8');
 
   // Track this sync operation with state machine
@@ -856,6 +895,9 @@ export function startDirectorySync(
 
   console.log(`[startDirectorySync] Created marker for directory ${normalizedPath} (syncId: ${syncId})`);
   console.log(`[startDirectorySync] Marker file: ${markerFilePath}`);
+  if (parentSyncIds.length > 0) {
+    console.log(`[startDirectorySync] 🔧 Also created ${parentSyncIds.length} parent directory sync operations`);
+  }
 
   return syncId;
 }
@@ -996,7 +1038,9 @@ export function isFileBeingSynced(projectDir: string, filePath: string): string 
  */
 export function isDirectoryBeingSynced(projectDir: string, directoryPath: string): string | null {
   // Marker file is placed inside the directory being created
-  const parts = directoryPath.split('/');
+  // 🔧 FIX: Handle both forward slashes and backslashes (Windows)
+  const path = require('path');
+  const parts = directoryPath.split(path.sep);  // Use path.sep for cross-platform compatibility
   const dirName = parts[parts.length - 1];
   const markerFileName = `.${dirName}.syncing`;
   const markerFilePath = join(projectDir, directoryPath, markerFileName);

@@ -263,14 +263,18 @@ export class OverleafWebSocketClient {
         console.log(`[Overleaf WS] ✅ Mapped doc ${docId} -> ${fullDocPath}`);
       }
 
-      if (this.onChangeCallback && fullDocPath) {
-        this.onChangeCallback({
-          type: 'created',
-          path: fullDocPath,  // Use full path
-          docId: docId,
-          isDirectory: false  // This is a document, not a directory
-        });
-      } else if (!fullDocPath) {
+      // 🔧 FIX: DON'T trigger onChangeCallback for reciveNewDoc
+      // This is triggered by our sync operations (local -> Overleaf)
+      // We already have the content locally, no need to sync it back
+      // The file was created in response to our sync_to_overleaf request
+      // If we trigger onChangeCallback here, it will cause a circular sync:
+      //   1. We sync local file to Overleaf (with content)
+      //   2. Overleaf creates file and sends reciveNewDoc
+      //   3. We fetch content (empty) and sync back to local
+      //   4. FileWatcher detects change and syncs again...
+      console.log(`[Overleaf WS] ℹ️ Skipping onChangeCallback for reciveNewDoc (prevents circular sync)`);
+
+      if (!fullDocPath) {
         console.warn(`[Overleaf WS] ⚠️ Could not extract path from ${message.name}:`, message.args);
       }
     } else if (message.name === 'reciveNewFile' || message.name === 'fileUploaded' || message.name === 'fileCreated') {
@@ -291,14 +295,9 @@ export class OverleafWebSocketClient {
         console.log(`[Overleaf WS] ✅ Mapped file ${arg0.file} -> ${arg0.path}`);
       }
 
-      if (this.onChangeCallback) {
-        this.onChangeCallback({
-          type: 'created',
-          path: arg0.path || `/${arg0.name}`,
-          docId: arg0.file,
-          isDirectory: false  // This is a file, not a directory
-        });
-      }
+      // 🔧 FIX: DON'T trigger onChangeCallback for fileCreated from our sync
+      // Similar to reciveNewDoc, this prevents circular sync
+      console.log(`[Overleaf WS] ℹ️ Skipping onChangeCallback for ${message.name} (prevents circular sync)`);
     } else if (message.name === 'reciveNewFolder' || message.name === 'folderCreated' || message.name === 'newFolderCreated') {
       // A new folder was created in Overleaf
       console.log(`[Overleaf WS] 📢📁 ${message.name} received:`, message.args);
@@ -371,15 +370,13 @@ export class OverleafWebSocketClient {
         console.log(`[Overleaf WS] ✅ Mapped folder ${folderId} -> ${folderPath} in folderIdToPath`);
       }
 
-      if (this.onChangeCallback && folderPath) {
-        console.log(`[Overleaf WS] 📤 Sending folder creation notification: ${folderPath}`);
-        this.onChangeCallback({
-          type: 'created',
-          path: folderPath,
-          docId: folderId || '',
-          isDirectory: true  // This is a folder
-        });
-      } else if (!folderPath) {
+      // 🔧 FIX: DON'T trigger onChangeCallback for reciveNewFolder
+      // This is triggered by our sync operations (local -> Overleaf)
+      // We already have the folder locally, no need to sync it back
+      // Prevents circular sync similar to reciveNewDoc
+      console.log(`[Overleaf WS] ℹ️ Skipping onChangeCallback for reciveNewFolder (prevents circular sync)`);
+
+      if (!folderPath) {
         console.warn(`[Overleaf WS] ⚠️ Could not extract path from ${message.name}:`, message.args);
       }
     } else if (message.name === 'removeEntity') {
@@ -891,7 +888,7 @@ export class OverleafWebSocketClient {
     const currentLines = contentData[1] || [];
     const version = contentData[2] || 0;
 
-    // Decode current lines
+    // Decode current lines (Overleaf sends them as UTF-8 bytes in string format)
     const decodedCurrentLines = currentLines.map((line: string) => {
       try {
         const bytes = new Uint8Array([...line].map((c) => c.charCodeAt(0)));
@@ -925,36 +922,26 @@ export class OverleafWebSocketClient {
   }
 
   /**
-   * Calculate operations to transform oldLines into newLines
-   * Simple implementation: delete all, then insert all
+   * Calculate operations to transform oldContent into newContent
+   * Uses character-level OT operations (not line-level)
    */
   private calculateOps(oldLines: string[], newLines: string[], baseVersion: number): any[] {
     const ops = [];
-    let v = baseVersion;
 
-    // Delete all existing lines (in reverse order to maintain indices)
-    for (let i = oldLines.length - 1; i >= 0; i--) {
-      ops.push({
-        d: i,  // delete at line i
-        v: v   // version
-      });
-      v++;
-    }
+    // For new documents, just insert all content
+    // Combine all lines into a single string with line breaks
+    const fullContent = newLines.join('\n');
 
-    // Insert all new lines
-    for (let i = 0; i < newLines.length; i++) {
-      // Encode line to UTF-8
-      const encoder = new TextEncoder();
-      const encoded = encoder.encode(newLines[i]);
-      const encodedLine = String.fromCharCode(...encoded);
+    // Encode content to UTF-8 bytes, then to string (Overleaf's format)
+    const encoder = new TextEncoder();
+    const encoded = encoder.encode(fullContent);
+    const encodedContent = String.fromCharCode(...encoded);
 
-      ops.push({
-        i: i,          // insert at line i
-        t: encodedLine, // text to insert (encoded)
-        v: v           // version
-      });
-      v++;
-    }
+    // Create single insert operation at position 0
+    ops.push({
+      i: encodedContent,  // insert content
+      p: 0                // at position 0
+    });
 
     return ops;
   }

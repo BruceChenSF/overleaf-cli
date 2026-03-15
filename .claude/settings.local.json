@@ -51,7 +51,8 @@
       "Bash(pnpm:*)",
       "Bash(npm --version)",
       "Bash(git restore:*)",
-      "Bash(npm run compile:*)"
+      "Bash(npm run compile:*)",
+      "Bash(npm run build:extension:*)"
     ]
   },
   "enabledPlugins": {

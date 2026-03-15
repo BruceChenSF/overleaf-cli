@@ -263,6 +263,9 @@ export class OverleafAPIHandler {
     private projectId: string,
     private overleafWsClient: OverleafWebSocketClient | null = null
   ) {
+    // Initialize EditorUpdater (sets up event listeners)
+    EditorUpdater.initialize();
+
     this.editorUpdater = new EditorUpdater();
     this.folderQueue = new FolderCreationQueue();
 
@@ -360,7 +363,7 @@ export class OverleafAPIHandler {
         isDirectory: message.isDirectory,
         success: false,
         error: error instanceof Error ? error.message : String(error),
-        timestamp: Date.now()
+        timestamp: message.timestamp
       });
     }
   }
@@ -390,7 +393,7 @@ export class OverleafAPIHandler {
         operation: 'update',
         path: message.path,
         success: true,
-        timestamp: Date.now()
+        timestamp: message.timestamp
       };
     } catch (error) {
       console.error(`[APIHandler] ❌ EditorUpdater failed:`, error);
@@ -479,6 +482,25 @@ export class OverleafAPIHandler {
       // Try to find the newly created file to get its ID
       const docId = await this.findFileId(fileName, parentPath);
 
+      // 🔧 NEW: If content is provided, update the file using EditorUpdater (DOM manipulation)
+      if (message.content && message.content.length > 0 && this.editorUpdater) {
+        console.log(`[APIHandler] 📝 File has content (${message.content.length} chars), updating via EditorUpdater...`);
+
+        // Use EditorUpdater to update content (direct DOM manipulation, Overleaf auto-saves)
+        try {
+          await this.editorUpdater.updateDocument(docId, message.content);
+          console.log(`[APIHandler] ✅ Updated via EditorUpdater: ${fileName}`);
+          console.log(`[APIHandler] 📄 Content preview: ${message.content.substring(0, 50)}${message.content.length > 50 ? '...' : ''}`);
+        } catch (error) {
+          console.error(`[APIHandler] ❌ EditorUpdater update failed:`, error);
+          throw new Error(`Failed to update file content via EditorUpdater: ${error}`);
+        }
+      } else if (message.content && message.content.length > 0) {
+        console.log(`[APIHandler] ⚠️ Content provided but no EditorUpdater, skipping update`);
+      } else {
+        console.log(`[APIHandler] ℹ️ File is empty, skipping content update`);
+      }
+
       return { docId, fileName };
     } catch (error) {
       console.error(`[APIHandler] ❌ Failed to create file via DOM:`, error);
@@ -500,7 +522,7 @@ export class OverleafAPIHandler {
         path: message.path,
         success: true,
         doc_id: result.docId,
-        timestamp: Date.now()
+        timestamp: message.timestamp
       };
     } catch (error) {
       console.error(`[APIHandler] ❌ Create document failed:`, error);
@@ -517,7 +539,7 @@ export class OverleafAPIHandler {
 
     // Use DOM manipulation to delete the file
     try {
-      await this.deleteFileViaDOM(message.doc_id);
+      await this.deleteFileViaDOM(message.doc_id, message.path);
       console.log(`[APIHandler] ✅ Deleted: ${message.path}`);
 
       return {
@@ -526,7 +548,7 @@ export class OverleafAPIHandler {
         operation: 'delete',
         path: message.path,
         success: true,
-        timestamp: Date.now()
+        timestamp: message.timestamp
       };
     } catch (error) {
       console.error(`[APIHandler] ❌ Delete via DOM failed:`, error);
@@ -562,7 +584,7 @@ export class OverleafAPIHandler {
         oldPath: message.oldPath,
         success: true,
         doc_id: message.doc_id,
-        timestamp: Date.now()
+        timestamp: message.timestamp
       };
     } catch (error) {
       console.error(`[APIHandler] ❌ Rename via DOM failed:`, error);
@@ -947,7 +969,7 @@ export class OverleafAPIHandler {
    * 6. Click the "Delete" button in the modal
    * 7. Wait for the delete operation to complete
    */
-  private async deleteFileViaDOM(docId: string): Promise<void> {
+  private async deleteFileViaDOM(docId: string, fallbackPath?: string): Promise<void> {
     console.log(`[APIHandler] 🔍 Looking for file in tree: ${docId}`);
 
     // Step 1: Find the file element
@@ -956,45 +978,71 @@ export class OverleafAPIHandler {
     // Try to find by data-entity-id first
     fileElement = document.querySelector(`[data-entity-id="${docId}"]`);
 
-    // Fallback: find by filename using global mapping
+    // Fallback 1: find by filename using global mapping
     if (!fileElement) {
       console.log(`[APIHandler] ⚠️ Could not find by data-entity-id, trying filename...`);
 
       // Get file info from global mapping
       const docInfo = (window as any).__overleaf_docIdToPath__?.get(docId);
-      if (!docInfo) {
-        throw new Error(`Could not find file info for doc ${docId}`);
+      if (docInfo) {
+        const path = docInfo.path;
+        const fileName = path.split('/').pop() || path;
+
+        console.log(`[APIHandler] 🔍 Looking for file: ${fileName} (path: ${path})`);
+
+        // Find all file name spans in the tree
+        const nameSpans = document.querySelectorAll('#ide-redesign-file-tree .item-name span');
+
+        for (const span of nameSpans) {
+          if (span.textContent?.trim() === fileName) {
+            // Found a matching filename, now check if it's the right one by looking at the path
+            // Walk up the tree to find the file entity
+            const fileDetails = span.closest('.file-tree-entity-details');
+            if (fileDetails) {
+              const li = fileDetails.closest('li');
+              if (li) {
+                fileElement = li;
+                console.log(`[APIHandler] ✅ Found file element by filename: ${fileName}`);
+                break;
+              }
+            }
+          }
+        }
+      } else {
+        console.log(`[APIHandler] ⚠️ Could not find doc info in global mapping`);
       }
+    }
 
-      const path = docInfo.path;
-      const fileName = path.split('/').pop() || path;
+    // Fallback 2: use the provided fallbackPath to find by filename
+    if (!fileElement && fallbackPath) {
+      console.log(`[APIHandler] ⚠️ Trying fallback path: ${fallbackPath}`);
 
-      console.log(`[APIHandler] 🔍 Looking for file: ${fileName} (path: ${path})`);
+      const fileName = fallbackPath.split('/').pop() || fallbackPath;
+      console.log(`[APIHandler] 🔍 Looking for file: ${fileName} (from fallback path)`);
 
       // Find all file name spans in the tree
       const nameSpans = document.querySelectorAll('#ide-redesign-file-tree .item-name span');
 
       for (const span of nameSpans) {
         if (span.textContent?.trim() === fileName) {
-          // Found a matching filename, now check if it's the right one by looking at the path
-          // Walk up the tree to find the file entity
+          // Found a matching filename
           const fileDetails = span.closest('.file-tree-entity-details');
           if (fileDetails) {
             const li = fileDetails.closest('li');
             if (li) {
               fileElement = li;
-              console.log(`[APIHandler] ✅ Found file element by filename: ${fileName}`);
+              console.log(`[APIHandler] ✅ Found file element by fallback filename: ${fileName}`);
               break;
             }
           }
         }
       }
-    } else {
-      console.log(`[APIHandler] ✅ Found file element by data-entity-id`);
     }
 
     if (!fileElement) {
       throw new Error(`Could not find file element for doc ${docId}`);
+    } else {
+      console.log(`[APIHandler] ✅ Found file element`);
     }
 
     // Find the clickable element (file-tree-entity-details)
@@ -1301,7 +1349,7 @@ export class OverleafAPIHandler {
         success: true,
         folder_id: result.folderId,
         isDirectory: true,
-        timestamp: Date.now()
+        timestamp: message.timestamp
       };
     } catch (error) {
       console.error(`[APIHandler] ❌ Create folder failed:`, error);
@@ -1329,7 +1377,7 @@ export class OverleafAPIHandler {
         path: message.path,
         success: true,
         isDirectory: true,
-        timestamp: Date.now()
+        timestamp: message.timestamp
       };
     } catch (error) {
       console.error(`[APIHandler] ❌ Delete folder failed:`, error);
@@ -1367,7 +1415,7 @@ export class OverleafAPIHandler {
         success: true,
         folder_id: message.folder_id,
         isDirectory: true,
-        timestamp: Date.now()
+        timestamp: message.timestamp
       };
     } catch (error) {
       console.error(`[APIHandler] ❌ Rename folder failed:`, error);
@@ -1703,8 +1751,39 @@ export class OverleafAPIHandler {
    */
   private async findFileId(fileName: string, parentPath: string): Promise<string> {
     console.log(`[APIHandler] 🔍 Looking up file ID for: ${fileName}`);
+    console.log(`[APIHandler]    Parent path: ${parentPath || '(root)'}`);
 
-    // Try to find the file in the file tree
+    // 🔧 NEW: First, check the global mapping (from Overleaf WebSocket)
+    // The global mapping is updated when Overleaf creates a file, so it should have the correct ID
+    const fullPath = parentPath ? `${parentPath}/${fileName}` : fileName;
+    const globalMapping = (window as any).__overleaf_docIdToPath__;
+
+    if (globalMapping) {
+      // Method 1: Search by path in the mapping
+      for (const [docId, docInfo] of globalMapping.entries()) {
+        if (docInfo.path === fullPath) {
+          console.log(`[APIHandler] ✅ Found file ID in global mapping (by path): ${docId}`);
+          return docId;
+        }
+      }
+
+      // Method 2: Search by filename only (in case parent path doesn't match exactly)
+      for (const [docId, docInfo] of globalMapping.entries()) {
+        const pathFileName = docInfo.path.split('/').pop();
+        if (pathFileName === fileName) {
+          console.log(`[APIHandler] ✅ Found file ID in global mapping (by filename): ${docId}`);
+          console.log(`[APIHandler]    Path in mapping: ${docInfo.path}`);
+          return docId;
+        }
+      }
+
+      console.log(`[APIHandler] ⚠️ File not found in global mapping`);
+    } else {
+      console.log(`[APIHandler] ⚠️ Global mapping not available`);
+    }
+
+    // Fallback: Try to find the file in the DOM file tree
+    console.log(`[APIHandler] 🔍 Searching in DOM file tree...`);
     const fileElement = await this.findFileByName(fileName);
 
     if (fileElement) {
@@ -1712,7 +1791,7 @@ export class OverleafAPIHandler {
       const fileId = fileElement.getAttribute('data-entity-id');
 
       if (fileId) {
-        console.log(`[APIHandler] ✅ Found file ID: ${fileId}`);
+        console.log(`[APIHandler] ✅ Found file ID in DOM: ${fileId}`);
         return fileId;
       }
     }

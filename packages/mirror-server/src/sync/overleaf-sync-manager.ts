@@ -4,6 +4,7 @@ import { join } from 'path';
 import { homedir } from 'os';
 
 import type { FileChangeEvent } from '../filesystem/watcher';
+import { BackendMessageQueue } from '../queue/backend-message-queue';
 
 interface SyncToOverleafMessage {
   type: 'sync_to_overleaf';
@@ -41,6 +42,7 @@ export class OverleafSyncManager {
   private projectId: string;
   private wsClient: WebSocket | null = null;
   private orchestrator: any; // SyncOrchestrator instance (will be set from server)
+  private messageQueue?: BackendMessageQueue; // Message queue for sequential processing
 
   /**
    * Normalize path to use forward slashes (Overleaf format)
@@ -59,6 +61,10 @@ export class OverleafSyncManager {
 
     this.wsClient.on('open', () => {
       console.log('[OverleafSyncManager] Connected to Mirror Server');
+
+      // Initialize the message queue after WebSocket is connected
+      this.messageQueue = new BackendMessageQueue(this.wsClient);
+      console.log('[OverleafSyncManager] ✅ Message queue initialized');
     });
 
     this.wsClient.on('message', (data: string) => {
@@ -180,10 +186,27 @@ export class OverleafSyncManager {
 
       // Only read content for create and update operations
       if (event.type === 'create' || event.type === 'update') {
-        content = await readFile(
-          join(this.projectPath, event.path),
-          'utf-8'
-        );
+        const filePath = join(this.projectPath, event.path);
+        content = await readFile(filePath, 'utf-8');
+
+        // Remove UTF-8 BOM if present (EF BB BF = U+FEFF)
+        // Some editors/commands add BOM, but Overleaf doesn't handle it well
+        if (content.charCodeAt(0) === 0xFEFF) {
+          console.log(`[OverleafSyncManager] 🔧 Removing UTF-8 BOM from ${event.path}`);
+          content = content.slice(1);
+        }
+
+        // Validate encoding: check for common encoding issues
+        const firstNullByte = content.indexOf('\x00');
+        if (firstNullByte !== -1) {
+          console.error(`[OverleafSyncManager] ❌ Invalid file encoding detected in ${event.path}`);
+          console.error(`[OverleafSyncManager]    File contains null bytes (likely UTF-16LE instead of UTF-8)`);
+          console.error(`[OverleafSyncManager]    First null byte at position: ${firstNullByte}`);
+          console.error(`[OverleafSyncManager]    Please ensure files are saved in UTF-8 encoding without BOM`);
+          console.error(`[OverleafSyncManager]    Skipping content sync for this file`);
+          // Don't sync invalid content
+          content = undefined;
+        }
       }
 
       // Find docId from mapping (using normalized path)
@@ -219,7 +242,7 @@ export class OverleafSyncManager {
         console.log(`[OverleafSyncManager] ➕ No docId for ${normalizedPath}, using CREATE`);
       }
 
-      // Send message to extension
+      // Send message to extension via queue
       const message: SyncToOverleafMessage = {
         type: 'sync_to_overleaf',
         project_id: this.projectId,
@@ -231,11 +254,24 @@ export class OverleafSyncManager {
         timestamp: Date.now()
       };
 
-      if (this.wsClient && this.wsClient.readyState === WebSocket.OPEN) {
-        this.wsClient.send(JSON.stringify(message));
-        console.log(`[OverleafSyncManager] ✅ Sent sync request: ${operation} ${normalizedPath}`);
+      // Use message queue to send sequentially and wait for response
+      if (this.messageQueue) {
+        console.log(`[OverleafSyncManager] 📤 Sending via queue: ${operation} ${normalizedPath}`);
+        try {
+          const response = await this.messageQueue.enqueue(message);
+          console.log(`[OverleafSyncManager] ✅ Queue response received: ${response.success ? 'SUCCESS' : 'FAILED'} ${response.path}`);
+        } catch (error) {
+          console.error(`[OverleafSyncManager] ❌ Queue operation failed: ${normalizedPath}`, error);
+        }
       } else {
-        console.warn('[OverleafSyncManager] ⚠️ WebSocket not connected');
+        console.warn('[OverleafSyncManager] ⚠️ Message queue not initialized, sending directly');
+        // Fallback to direct send if queue is not available
+        if (this.wsClient && this.wsClient.readyState === WebSocket.OPEN) {
+          this.wsClient.send(JSON.stringify(message));
+          console.log(`[OverleafSyncManager] ✅ Sent sync request: ${operation} ${normalizedPath}`);
+        } else {
+          console.warn('[OverleafSyncManager] ⚠️ WebSocket not connected');
+        }
       }
     } catch (error) {
       console.error(`[OverleafSyncManager] ❌ Failed to sync ${event.path}:`, error);
@@ -330,7 +366,7 @@ export class OverleafSyncManager {
         console.log(`[OverleafSyncManager] 🎯 Started operation tracking: ${opContext.operationId}`);
       }
 
-      // Send message to extension with isDirectory flag
+      // Send message to extension with isDirectory flag via queue
       const message: SyncToOverleafMessage = {
         type: 'sync_to_overleaf',
         project_id: this.projectId,
@@ -342,14 +378,31 @@ export class OverleafSyncManager {
         timestamp: Date.now()
       };
 
-      if (this.wsClient && this.wsClient.readyState === WebSocket.OPEN) {
-        this.wsClient.send(JSON.stringify(message));
-        console.log(`[OverleafSyncManager] ✅ Sent directory sync request: ${operation} ${normalizedPath}`);
+      // Use message queue to send sequentially and wait for response
+      if (this.messageQueue) {
+        console.log(`[OverleafSyncManager] 📤 Sending directory via queue: ${operation} ${normalizedPath}`);
+        try {
+          const response = await this.messageQueue.enqueue(message);
+          console.log(`[OverleafSyncManager] ✅ Queue response received: ${response.success ? 'SUCCESS' : 'FAILED'} ${response.path}`);
+        } catch (error) {
+          console.error(`[OverleafSyncManager] ❌ Queue operation failed: ${normalizedPath}`, error);
+          // Fail the operation if queue operation fails
+          if (this.orchestrator && opContext) {
+            this.orchestrator.failOperation(opContext.operationId, error);
+          }
+        }
       } else {
-        console.warn('[OverleafSyncManager] ⚠️ WebSocket not connected');
-        // Fail the operation if WebSocket is not connected
-        if (this.orchestrator && opContext) {
-          this.orchestrator.failOperation(opContext.operationId, new Error('WebSocket not connected'));
+        console.warn('[OverleafSyncManager] ⚠️ Message queue not initialized, sending directly');
+        // Fallback to direct send if queue is not available
+        if (this.wsClient && this.wsClient.readyState === WebSocket.OPEN) {
+          this.wsClient.send(JSON.stringify(message));
+          console.log(`[OverleafSyncManager] ✅ Sent directory sync request: ${operation} ${normalizedPath}`);
+        } else {
+          console.warn('[OverleafSyncManager] ⚠️ WebSocket not connected');
+          // Fail the operation if WebSocket is not connected
+          if (this.orchestrator && opContext) {
+            this.orchestrator.failOperation(opContext.operationId, new Error('WebSocket not connected'));
+          }
         }
       }
     } catch (error) {
@@ -384,6 +437,12 @@ export class OverleafSyncManager {
   }
 
   private handleSyncResponse(response: SyncToOverleafResponse): void {
+    // First, forward the response to the message queue
+    if (this.messageQueue) {
+      this.messageQueue.handleResponse(response);
+      console.log(`[OverleafSyncManager] 📨 Response forwarded to message queue`);
+    }
+
     if (response.success) {
       console.log(`[OverleafSyncManager] ✅ Sync successful: ${response.operation} ${response.path}`);
 
