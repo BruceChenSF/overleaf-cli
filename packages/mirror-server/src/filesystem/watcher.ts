@@ -13,6 +13,8 @@ interface FileChangeEvent {
   path: string;  // Relative to project directory path
   oldPath?: string;  // For rename operations
   isDirectory?: boolean;  // True if this is a directory operation
+  isRootRename?: boolean;  // True if this is a root directory rename (triggers Overleaf update)
+  isCascadeRename?: boolean;  // True if this is a child of renamed parent (local mapping update only)
 }
 
 type ChangeEventHandler = (event: FileChangeEvent) => void;
@@ -36,6 +38,7 @@ export class FileWatcher {
   private projectDir: string;
   private pendingDeletes = new Map<string, PendingDelete>();
   private pendingDirDeletes = new Map<string, PendingDelete>(); // NEW: Track pending directory deletes for rename detection
+  private pendingRootDirCreates = new Map<string, { path: string; timestamp: number; timer: NodeJS.Timeout }>(); // NEW: Track root dir creates for reverse rename detection
   private readonly RENAME_DETECTION_WINDOW = 3000; // 3 second window to detect renames (increased for Windows)
   private readonly DIR_RENAME_DETECTION_WINDOW = 2000; // 2 second window for directory renames (directories rename faster)
   private fileSizes = new Map<string, number>(); // Track file sizes for rename detection
@@ -253,29 +256,130 @@ export class FileWatcher {
         if (this.isWatching) {
           console.log(`[FileWatcher] 🔍 Checking for directory rename...`);
 
+          // 🔧 CRITICAL FIX: Normalize path separators to forward slashes
+          // Windows uses backslashes, but we need forward slashes for consistent splitting
+          const normalizedNewPath = relativePath.replace(/\\/g, '/');
+          const pathParts = normalizedNewPath.split('/');
+          const isRootDirectory = pathParts.length === 1;
+
+          // 🔧 NEW: For root directories, delay the CREATE event to check for reverse rename
+          // Windows creates new root first, then deletes old root
+          if (isRootDirectory) {
+            console.log(`[FileWatcher] 🔄 Root directory detected: ${normalizedNewPath}, delaying CREATE event`);
+
+            // Store the pending create and wait to see if a corresponding delete happens
+            const timer = setTimeout(() => {
+              // Check if there's a matching pending delete
+              let matchedDelete: { path: string; info: PendingDelete } | null = null;
+
+              for (const [deletedPath, deleteInfo] of this.pendingDirDeletes.entries()) {
+                const normalizedDeletedPath = deletedPath.replace(/\\/g, '/');
+                const deletedParts = normalizedDeletedPath.split('/');
+
+                // Check if this is also a root directory
+                if (deletedParts.length === 1) {
+                  // Check if within time window
+                  const timeDiff = Date.now() - deleteInfo.timestamp;
+                  if (timeDiff <= this.DIR_RENAME_DETECTION_WINDOW) {
+                    console.log(`[FileWatcher] ✅ Reverse rename detected: ${normalizedDeletedPath} -> ${normalizedNewPath}`);
+                    matchedDelete = { path: deletedPath, info: deleteInfo };
+                    break;
+                  }
+                }
+              }
+
+              if (matchedDelete) {
+                // Remove from pending deletes
+                this.pendingDirDeletes.delete(matchedDelete.path);
+
+                // 🔧 FIX: Mark this as a ROOT directory rename (cascading)
+                // Root directory renames should be sent to Overleaf, but child renames should not
+                console.log(`[FileWatcher] 📝✅ Directory rename detected (reverse, ROOT): ${matchedDelete.path} -> ${relativePath}`);
+                this.onChangeCallback?.({
+                  type: 'rename',
+                  path: relativePath,
+                  oldPath: matchedDelete.path,
+                  isDirectory: true,
+                  isRootRename: true  // 🔧 NEW: Mark as root rename
+                });
+              } else {
+                // No matching delete, treat as create
+                console.log(`[FileWatcher] 📁 Directory creation detected (reverse check passed): ${relativePath}`);
+                this.onChangeCallback?.({
+                  type: 'create',
+                  path: relativePath,
+                  isDirectory: true
+                });
+              }
+
+              // Clean up
+              this.pendingRootDirCreates.delete(relativePath);
+            }, 300); // Wait 300ms for potential delete event
+
+            this.pendingRootDirCreates.set(relativePath, {
+              path: relativePath,
+              timestamp: Date.now(),
+              timer
+            });
+
+            return;
+          }
+
+          // For non-root directories, proceed with normal rename detection
           // Check all pending directory deletes to see if any match this add
           let matchedDelete: { path: string; info: PendingDelete } | null = null;
 
-          for (const [deletedPath, deleteInfo] of this.pendingDirDeletes.entries()) {
+          // 🔧 FIX: Sort pending deletes by depth (deepest first) to avoid incorrect matching
+          // This ensures that deeper paths are matched before shallower ones
+          const sortedDeletes = Array.from(this.pendingDirDeletes.entries()).sort((a, b) => {
+            const aDepth = a[0].replace(/\\/g, '/').split('/').length;
+            const bDepth = b[0].replace(/\\/g, '/').split('/').length;
+            return bDepth - aDepth; // Descending order (deepest first)
+          });
+
+          for (const [deletedPath, deleteInfo] of sortedDeletes) {
             const timeDiff = Date.now() - deleteInfo.timestamp;
 
             // Check if within rename detection window
             if (timeDiff <= this.DIR_RENAME_DETECTION_WINDOW) {
-              console.log(`[FileWatcher] 🔍 Found pending delete: ${deletedPath} (${timeDiff}ms ago)`);
+              // 🔧 CRITICAL FIX: Normalize the deleted path as well
+              const normalizedDeletedPath = deletedPath.replace(/\\/g, '/');
+              console.log(`[FileWatcher] 🔍 Found pending delete: ${normalizedDeletedPath} (${timeDiff}ms ago)`);
 
-              // Check if the paths are similar (only last component differs)
-              // This is a simple heuristic - could be improved
-              const oldParts = deletedPath.split('/');
-              const newParts = relativePath.split('/');
+              // 🔧 FIX: Check if paths have same depth and similar structure
+              const oldParts = normalizedDeletedPath.split('/');
+              const newParts = normalizedNewPath.split('/');
+
+              // Must have same number of path components
+              if (oldParts.length !== newParts.length) {
+                console.log(`[FileWatcher] ⏭️  Skipping ${normalizedDeletedPath}: depth mismatch (${oldParts.length} vs ${newParts.length})`);
+                continue;
+              }
 
               // Check if all parts except the last are the same
               const oldParent = oldParts.slice(0, -1).join('/');
               const newParent = newParts.slice(0, -1).join('/');
 
-              if (oldParent === newParent && oldParts.length === newParts.length) {
-                console.log(`[FileWatcher] ✅ Detected directory rename: ${deletedPath} -> ${relativePath}`);
+              if (oldParent === newParent) {
+                // Case 1: Standard rename (same parent, different name)
+                console.log(`[FileWatcher] ✅ Detected directory rename (same parent): ${normalizedDeletedPath} -> ${normalizedNewPath}`);
                 matchedDelete = { path: deletedPath, info: deleteInfo };
                 break;
+              } else {
+                // 🔧 Case 2: Check if parent directory was renamed (CASCADE RENAME)
+                // Extract just the directory names (last component)
+                const oldName = oldParts[oldParts.length - 1];
+                const newName = newParts[newParts.length - 1];
+
+                // Check if names are the same (suggesting parent was renamed)
+                if (oldName === newName) {
+                  console.log(`[FileWatcher] ✅ Detected directory rename (parent renamed/CASCADE): ${normalizedDeletedPath} -> ${normalizedNewPath}`);
+                  console.log(`[FileWatcher]    Parent directories differ: ${oldParent} -> ${newParent}`);
+                  matchedDelete = { path: deletedPath, info: deleteInfo };
+                  break;
+                } else {
+                  console.log(`[FileWatcher] ⏭️  Skipping ${normalizedDeletedPath}: name mismatch (${oldName} vs ${newName}), parent mismatch (${oldParent} vs ${newParent})`);
+                }
               }
             }
           }
@@ -284,14 +388,41 @@ export class FileWatcher {
             // Remove from pending deletes
             this.pendingDirDeletes.delete(matchedDelete.path);
 
-            // Trigger rename event
-            console.log(`[FileWatcher] 📝✅ Directory rename detected: ${matchedDelete.path} -> ${relativePath}`);
-            this.onChangeCallback?.({
-              type: 'rename',
-              path: relativePath,
-              oldPath: matchedDelete.path,
-              isDirectory: true
-            });
+            // 🔧 CRITICAL: Check if this is a CASCADE rename (child of a renamed parent)
+            const normalizedDeletedPath = matchedDelete.path.replace(/\\/g, '/');
+            const oldParts = normalizedDeletedPath.split('/');
+            const newParts = normalizedNewPath.split('/');
+            const oldParent = oldParts.slice(0, -1).join('/');
+            const newParent = newParts.slice(0, -1).join('/');
+
+            const isCascadeRename = (oldParent !== newParent);
+            const isRootRename = (oldParts.length === 1);
+
+            if (isCascadeRename) {
+              // This is a child directory affected by parent rename
+              // Don't send to Overleaf (Overleaf handles it automatically)
+              // Just update local mappings
+              console.log(`[FileWatcher] 🔗 CASCADE rename (local only): ${matchedDelete.path} -> ${relativePath}`);
+              console.log(`[FileWatcher] ℹ️  Not sending to Overleaf - parent rename will handle it`);
+
+              // Still trigger rename event for local mapping updates, but mark as cascading
+              this.onChangeCallback?.({
+                type: 'rename',
+                path: relativePath,
+                oldPath: matchedDelete.path,
+                isDirectory: true,
+                isCascadeRename: true  // 🔧 NEW: Mark as cascading rename (don't send to Overleaf)
+              });
+            } else {
+              // This is a root directory rename - send to Overleaf
+              console.log(`[FileWatcher] 📝✅ Directory rename detected: ${matchedDelete.path} -> ${relativePath}`);
+              this.onChangeCallback?.({
+                type: 'rename',
+                path: relativePath,
+                oldPath: matchedDelete.path,
+                isDirectory: true
+              });
+            }
           } else {
             // No matching delete found, treat as create
             console.log(`[FileWatcher] 📁 Directory creation detected: ${relativePath}`);
@@ -321,14 +452,58 @@ export class FileWatcher {
           return;
         }
 
-        // NEW: Store directory deletion for rename detection (similar to file rename detection)
+        // Store directory deletion for rename detection (similar to file rename detection)
         // Don't immediately trigger delete - wait to see if a corresponding addDir happens
         if (this.isWatching) {
           console.log(`[FileWatcher] 📁 Storing directory deletion for rename detection: ${relativePath}`);
+
+          const normalizedPath = relativePath.replace(/\\/g, '/');
+          const pathParts = normalizedPath.split('/');
+          const isRootDirectory = pathParts.length === 1;
+
           this.pendingDirDeletes.set(relativePath, {
             path: relativePath,
             timestamp: Date.now()
           });
+
+          // 🔧 NEW: For root directories, immediately check if there's a pending create (reverse rename)
+          if (isRootDirectory) {
+            console.log(`[FileWatcher] 🔍 Root directory deletion: checking for pending creates...`);
+
+            // Check all pending root creates
+            for (const [createdPath, createInfo] of this.pendingRootDirCreates.entries()) {
+              const normalizedCreatedPath = createdPath.replace(/\\/g, '/');
+              const createdParts = normalizedCreatedPath.split('/');
+
+              // Check if this is also a root directory
+              if (createdParts.length === 1) {
+                // Check if within time window
+                const timeDiff = Date.now() - createInfo.timestamp;
+                if (timeDiff <= 500) { // Very recent create (within 500ms)
+                  console.log(`[FileWatcher] ✅ Reverse rename match found: ${normalizedPath} -> ${normalizedCreatedPath}`);
+
+                  // Cancel the pending create timer
+                  clearTimeout(createInfo.timer);
+                  this.pendingRootDirCreates.delete(createdPath);
+
+                  // Remove from pending deletes
+                  this.pendingDirDeletes.delete(relativePath);
+
+                  // Trigger rename event (old -> new)
+                  console.log(`[FileWatcher] 📝✅ Directory rename detected (reverse): ${relativePath} -> ${createdPath}`);
+                  this.onChangeCallback?.({
+                    type: 'rename',
+                    path: createdPath,
+                    oldPath: relativePath,
+                    isDirectory: true
+                  });
+
+                  // Don't continue with normal delete processing
+                  return;
+                }
+              }
+            }
+          }
 
           // Set timeout to clear pending delete if no matching addDir occurs
           setTimeout(() => {

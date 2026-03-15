@@ -255,6 +255,31 @@ export class OverleafSyncManager {
         console.log(`[OverleafSyncManager] 🔍 Normalized old directory path: ${normalizedOldPath}`);
       }
 
+      // 🔧 NEW: Check if this is a CASCADE rename (child of renamed parent)
+      // Cascade renames should NOT be sent to Overleaf (Overleaf handles them automatically)
+      if (event.isCascadeRename) {
+        console.log(`[OverleafSyncManager] 🔗 CASCADE rename detected - updating local mappings only`);
+        console.log(`[OverleafSyncManager]    ${normalizedOldPath} -> ${normalizedPath}`);
+
+        // Update local folderId mapping
+        if (normalizedOldPath && event.type === 'rename') {
+          const folderId = this.pathToFolderId.get(normalizedOldPath);
+          if (folderId) {
+            this.pathToFolderId.delete(normalizedOldPath);
+            this.pathToFolderId.set(normalizedPath, folderId);
+            console.log(`[OverleafSyncManager] ✅ Updated local mapping: ${normalizedOldPath} → ${normalizedPath} (${folderId})`);
+          }
+        }
+
+        // Also update any file mappings under this directory
+        if (normalizedOldPath) {
+          this.updateChildFileMappings(normalizedOldPath, normalizedPath);
+        }
+
+        console.log(`[OverleafSyncManager] ✅ CASCADE rename completed (local only)`);
+        return;
+      }
+
       // NEW: SyncOrchestrator - Start tracking directory operation
       let operation: 'update' | 'create' | 'delete' | 'rename';
       let folderId: string | undefined;
@@ -276,6 +301,13 @@ export class OverleafSyncManager {
         operation = 'rename';
         folderId = normalizedOldPath ? this.pathToFolderId.get(normalizedOldPath) : undefined;
         console.log(`[OverleafSyncManager] 📝 Directory renamed: ${normalizedOldPath} -> ${normalizedPath}, folderId: ${folderId || '(none)'}`);
+
+        // 🔧 NEW: If this is a ROOT directory rename, batch update child mappings
+        // This prevents sending individual RENAME requests for children
+        if (event.isRootRename && normalizedOldPath) {
+          console.log(`[OverleafSyncManager] 🔄 ROOT directory rename - batch updating child mappings`);
+          this.updateChildDirectoryMappings(normalizedOldPath, normalizedPath);
+        }
       } else if (this.pathToFolderId.has(normalizedPath)) {
         operation = 'update';
         folderId = this.pathToFolderId.get(normalizedPath);
@@ -323,6 +355,32 @@ export class OverleafSyncManager {
     } catch (error) {
       console.error(`[OverleafSyncManager] ❌ Failed to sync directory ${event.path}:`, error);
     }
+  }
+
+  /**
+   * Update file mappings for all files under a renamed directory
+   * This is called when a parent directory is renamed
+   *
+   * @param oldPath - Old directory path
+   * @param newPath - New directory path
+   */
+  private updateChildFileMappings(oldPath: string, newPath: string): void {
+    console.log(`[OverleafSyncManager] 🔄 Updating child file mappings: ${oldPath} -> ${newPath}`);
+
+    let updatedCount = 0;
+
+    // Update all docId mappings that start with oldPath
+    for (const [filePath, docId] of this.pathToDocId.entries()) {
+      if (filePath.startsWith(oldPath + '/') || filePath === oldPath) {
+        const newFilePath = filePath.replace(oldPath, newPath);
+        this.pathToDocId.delete(filePath);
+        this.pathToDocId.set(newFilePath, docId);
+        updatedCount++;
+        console.log(`[OverleafSyncManager]   📝 ${filePath} -> ${newFilePath} (${docId})`);
+      }
+    }
+
+    console.log(`[OverleafSyncManager] ✅ Updated ${updatedCount} file mappings`);
   }
 
   private handleSyncResponse(response: SyncToOverleafResponse): void {
@@ -487,5 +545,43 @@ export class OverleafSyncManager {
   getFolderId(path: string): string | undefined {
     const normalizedPath = this.normalizePath(path);
     return this.pathToFolderId.get(normalizedPath);
+  }
+
+  /**
+   * Update all child directory and file mappings when parent directory is renamed
+   * This is called when a root directory is renamed to update all nested mappings
+   *
+   * @param oldPath - Old parent directory path
+   * @param newPath - New parent directory path
+   */
+  private updateChildDirectoryMappings(oldPath: string, newPath: string): void {
+    console.log(`[OverleafSyncManager] 🔄 Batch updating child mappings: ${oldPath} -> ${newPath}`);
+
+    let updatedFolderCount = 0;
+    let updatedFileCount = 0;
+
+    // Update all folderId mappings that start with oldPath
+    for (const [folderPath, folderId] of this.pathToFolderId.entries()) {
+      if (folderPath.startsWith(oldPath + '/') || folderPath === oldPath) {
+        const newFolderPath = folderPath.replace(oldPath, newPath);
+        this.pathToFolderId.delete(folderPath);
+        this.pathToFolderId.set(newFolderPath, folderId);
+        updatedFolderCount++;
+        console.log(`[OverleafSyncManager]   📁 ${folderPath} -> ${newFolderPath} (${folderId})`);
+      }
+    }
+
+    // Update all file mappings under this directory
+    for (const [filePath, docId] of this.pathToDocId.entries()) {
+      if (filePath.startsWith(oldPath + '/') || filePath === oldPath) {
+        const newFilePath = filePath.replace(oldPath, newPath);
+        this.pathToDocId.delete(filePath);
+        this.pathToDocId.set(newFilePath, docId);
+        updatedFileCount++;
+        // Don't log each file to avoid spamming
+      }
+    }
+
+    console.log(`[OverleafSyncManager] ✅ Updated ${updatedFolderCount} folder mappings and ${updatedFileCount} file mappings`);
   }
 }
