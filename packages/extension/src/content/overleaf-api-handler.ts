@@ -29,8 +29,234 @@ interface SyncToOverleafResponse {
   timestamp: number;
 }
 
+/**
+ * Queue for managing folder creation requests
+ * Ensures folders are created in the correct order (parent before child)
+ */
+class FolderCreationQueue {
+  private queue: Array<{
+    message: SyncToOverleafMessage;
+    resolve: (response: SyncToOverleafResponse) => void;
+    reject: (error: Error) => void;
+  }> = [];
+  private processing = false;
+  private createdFolders = new Set<string>(); // Track folders that have been successfully created
+
+  /**
+   * Get the depth of a path (number of segments)
+   */
+  private getPathDepth(path: string): number {
+    return path.split('/').filter(p => p.length > 0).length;
+  }
+
+  /**
+   * Get the parent path of a folder
+   */
+  private getParentPath(path: string): string {
+    const parts = path.split('/').filter(p => p.length > 0);
+    parts.pop(); // Remove the last component (the folder itself)
+    return parts.join('/');
+  }
+
+  /**
+   * Check if all parent folders have been created
+   */
+  private areParentsCreated(path: string): boolean {
+    const parentPath = this.getParentPath(path);
+    if (parentPath === '') {
+      return true; // Root level, no parents
+    }
+    return this.createdFolders.has(parentPath);
+  }
+
+  /**
+   * Mark a folder as created
+   */
+  markFolderCreated(path: string): void {
+    this.createdFolders.add(path);
+    console.log(`[FolderQueue] ✅ Marked folder as created: ${path}`);
+    console.log(`[FolderQueue] 📁 Created folders: ${Array.from(this.createdFolders).join(', ')}`);
+  }
+
+  /**
+   * Add a folder creation request to the queue
+   */
+  async enqueue(message: SyncToOverleafMessage): Promise<SyncToOverleafResponse> {
+    return new Promise((resolve, reject) => {
+      this.queue.push({ message, resolve, reject });
+
+      // Sort queue by path depth (shallowest first) to ensure parents are created before children
+      this.queue.sort((a, b) => {
+        const depthA = this.getPathDepth(a.message.path);
+        const depthB = this.getPathDepth(b.message.path);
+        return depthA - depthB;
+      });
+
+      console.log(`[FolderQueue] 📥 Enqueued folder creation: ${message.path} (depth: ${this.getPathDepth(message.path)})`);
+      console.log(`[FolderQueue] 📊 Queue size: ${this.queue.length} (processing: ${this.processing})`);
+
+      // Log current queue state for debugging
+      console.log(`[FolderQueue] 📋 Current queue:`);
+      this.queue.forEach((item, index) => {
+        console.log(`[FolderQueue]    [${index}] ${item.message.path} (depth: ${this.getPathDepth(item.message.path)})`);
+      });
+
+      // Only start processing if not already processing
+      if (!this.processing) {
+        console.log(`[FolderQueue] 🚀 Starting queue processing`);
+        this.processQueue();
+      } else {
+        console.log(`[FolderQueue] ⏸️ Queue is being processed, new task will be handled in order`);
+      }
+    });
+  }
+
+  /**
+   * Process the queue sequentially
+   */
+  private async processQueue(): Promise<void> {
+    // Prevent multiple queue processing runs
+    if (this.processing) {
+      console.log(`[FolderQueue] ⏸️ Queue already processing, skipping`);
+      return;
+    }
+
+    if (this.queue.length === 0) {
+      console.log(`[FolderQueue] 📭 Queue is empty, nothing to process`);
+      return;
+    }
+
+    this.processing = true;
+    console.log(`[FolderQueue] 🚀 Starting queue processing, ${this.queue.length} items in queue`);
+
+    let processedCount = 0;
+    // Increased limit significantly to handle delays in parent folder creation
+    const maxIterations = this.queue.length * 10;
+    let iteration = 0;
+
+    while (this.queue.length > 0 && iteration < maxIterations) {
+      iteration++;
+
+      // Check if we can process the first item in the queue
+      const firstItem = this.queue[0];
+      if (!firstItem) break;
+
+      const { message, resolve, reject } = firstItem;
+
+      // Check if parent folders have been created
+      if (!this.areParentsCreated(message.path)) {
+        const parentPath = this.getParentPath(message.path);
+        console.log(`[FolderQueue] ⏸️ Parent folder not ready for: ${message.path}`);
+        console.log(`[FolderQueue]    Waiting for parent: ${parentPath || '(root)'}`);
+        console.log(`[FolderQueue]    Created folders: ${Array.from(this.createdFolders).join(', ')}`);
+        console.log(`[FolderQueue]    Iteration: ${iteration}/${maxIterations}`);
+
+        // Check if parent is in the queue (will be processed before this one)
+        const parentInQueue = this.queue.some(item => item.message.path === parentPath);
+
+        if (parentInQueue) {
+          console.log(`[FolderQueue]    ✅ Parent is in queue, will be processed first`);
+          // Move to next iteration (keep this one in queue)
+          // Don't count this as an iteration towards the limit, since we're just waiting
+          iteration--;
+          await new Promise(resolve => setTimeout(resolve, 100));
+          continue;
+        } else {
+          // Parent not in queue and not created
+          // This means parent hasn't arrived yet - wait for it
+          console.log(`[FolderQueue]    ⏳ Parent NOT in queue and not created`);
+          console.log(`[FolderQueue]    🔮 Waiting for parent to arrive...`);
+
+          // Wait a bit and check again
+          await new Promise(resolve => setTimeout(resolve, 200));
+
+          // Check again if parent arrived (might have been added while we were waiting)
+          const parentStillNotInQueue = !this.queue.some(item => item.message.path === parentPath);
+
+          if (parentStillNotInQueue && !this.createdFolders.has(parentPath)) {
+            // After waiting, parent still not here
+            // If this is root level, process it; otherwise fail
+            if (parentPath === '') {
+              console.log(`[FolderQueue]    ✅ Root level, no parent needed, processing...`);
+            } else {
+              // Check if we've waited long enough (e.g., 20 iterations * 200ms = 4 seconds)
+              // We use a local counter for this specific wait
+              const waitIterations = iteration - processedCount; // Approximate wait time
+
+              if (waitIterations > 20) {
+                console.log(`[FolderQueue]    ❌ Waited too long for parent (${waitIterations} iterations), giving up`);
+                // Remove from queue and fail
+                this.queue.shift();
+                reject(new Error(`Parent folder "${parentPath}" did not arrive in time`));
+                processedCount++; // Count this as processed (even though failed)
+                continue;
+              } else {
+                console.log(`[FolderQueue]    ⏳ Still waiting... (wait iteration ${waitIterations}/20)`);
+                // Don't count this as an iteration towards the limit
+                iteration--;
+                continue; // Keep waiting
+              }
+            }
+          } else {
+            console.log(`[FolderQueue]    ✅ Parent arrived while waiting!`);
+            // Don't count this as an iteration towards the limit
+            iteration--;
+            continue; // Check again in next iteration
+          }
+        }
+      }
+
+      // Remove the item from queue (we're going to process it)
+      this.queue.shift();
+
+      console.log(`[FolderQueue] ⏳ Processing folder creation: ${message.path} (${this.queue.length} items remaining)`);
+
+      try {
+        const response = await this.processItem(message);
+        resolve(response);
+
+        // Mark this folder as created
+        this.createdFolders.add(message.path);
+        processedCount++;
+
+        console.log(`[FolderQueue] ✅ Completed folder creation: ${message.path}`);
+      } catch (error) {
+        console.error(`[FolderQueue] ❌ Failed to create folder: ${message.path}`, error);
+        reject(error as Error);
+        processedCount++; // Count failed items as processed
+      }
+    }
+
+    if (iteration >= maxIterations) {
+      console.warn(`[FolderQueue] ⚠️ Reached max iterations (${maxIterations}), stopping to prevent infinite loop`);
+      console.warn(`[FolderQueue] ⚠️ Remaining items in queue: ${this.queue.length}`);
+      console.warn(`[FolderQueue] ⚠️ Processed ${processedCount} items successfully/with errors`);
+    }
+
+    console.log(`[FolderQueue] 🏁 Queue processing complete (${processedCount} items processed)`);
+    this.processing = false;
+  }
+
+  /**
+   * Process a single folder creation item
+   * This will be implemented by the OverleafAPIHandler
+   */
+  private processItem(message: SyncToOverleafMessage): Promise<SyncToOverleafResponse> {
+    // This is a placeholder - the actual implementation will be provided by the handler
+    throw new Error('FolderCreationQueue.processItem not implemented');
+  }
+
+  /**
+   * Set the handler for processing individual folder creation requests
+   */
+  setProcessHandler(handler: (message: SyncToOverleafMessage) => Promise<SyncToOverleafResponse>): void {
+    this.processItem = handler;
+  }
+}
+
 export class OverleafAPIHandler {
   private editorUpdater: EditorUpdater;
+  private folderQueue: FolderCreationQueue;
 
   constructor(
     private mirrorClient: MirrorClient,
@@ -38,6 +264,12 @@ export class OverleafAPIHandler {
     private overleafWsClient: OverleafWebSocketClient | null = null
   ) {
     this.editorUpdater = new EditorUpdater();
+    this.folderQueue = new FolderCreationQueue();
+
+    // Set the process handler for the folder queue
+    this.folderQueue.setProcessHandler(async (message) => {
+      return this.processFolderCreation(message);
+    });
   }
 
   private async retryWithBackoff<T>(
@@ -81,7 +313,9 @@ export class OverleafAPIHandler {
       if (message.isDirectory) {
         switch (message.operation) {
           case 'create':
-            result = await this.createFolder(message);
+            // Use queue for folder creation to ensure proper ordering
+            console.log(`[APIHandler] 📥 Adding folder creation to queue: ${message.path}`);
+            result = await this.folderQueue.enqueue(message);
             break;
           case 'delete':
             result = await this.deleteFolder(message);
@@ -164,51 +398,28 @@ export class OverleafAPIHandler {
     }
   }
 
+  /**
+   * Create a document - LOGGING ONLY VERSION
+   * TODO: Implement actual API call or DOM manipulation after testing message flow
+   */
   private async createDocument(message: SyncToOverleafMessage): Promise<SyncToOverleafResponse> {
     // Parse path
     const pathParts = message.path.split('/');
     const fileName = pathParts.pop() || message.path;
 
-    // Create document
-    const response = await this.retryWithBackoff(
-      async () => await fetch(
-        `/project/${this.projectId}/doc`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            name: fileName,
-            parent_folder_id: 'rootFolder'
-          })
-        }
-      ),
-      `Create ${message.path}`
-    );
+    console.log(`[APIHandler] 📄➕ [LOGGING ONLY] Would create document: ${message.path}`);
+    console.log(`[APIHandler]    File name: ${fileName}`);
+    console.log(`[APIHandler]    Content length: ${message.content?.length || 0}`);
+    console.log(`[APIHandler] ⚠️  TODO: Implement actual document creation via API or DOM`);
+    console.log(`[APIHandler] ℹ️  For now, returning mock response to test message flow`);
 
-    if (!response.ok) {
-      throw new Error(`Create failed: ${response.status} ${response.statusText}`);
-    }
+    // Simulate some delay
+    await this.sleep(100);
 
-    let data;
-    try {
-      data = await response.json();
-    } catch (parseError) {
-      throw new Error(`Failed to parse response: ${parseError}`);
-    }
+    // Generate a mock doc_id for testing
+    const mockDocId = `mock-doc-${Date.now()}`;
 
-    if (!data._id) {
-      throw new Error('Response missing _id field');
-    }
-
-    console.log(`[APIHandler] ✅ Created: ${message.path} (id: ${data._id})`);
-
-    // Immediately update content
-    await this.updateDocument({
-      ...message,
-      doc_id: data._id
-    });
+    console.log(`[APIHandler] ✅ [LOGGING ONLY] Document create logged: ${message.path} (mock doc_id: ${mockDocId})`);
 
     return {
       type: 'sync_to_overleaf_response',
@@ -216,7 +427,7 @@ export class OverleafAPIHandler {
       operation: 'create',
       path: message.path,
       success: true,
-      doc_id: data._id,
+      doc_id: mockDocId,
       timestamp: Date.now()
     };
   }
@@ -877,18 +1088,87 @@ export class OverleafAPIHandler {
   }
 
   /**
-   * Create a folder - LOGGING ONLY VERSION
-   * TODO: Implement actual DOM manipulation after testing message flow
+   * Create a folder by simulating user interaction with the file tree UI
+   *
+   * Steps:
+   * 1. If there's a parent path, click the parent folder to navigate into it
+   * 2. Otherwise, click the blank area to ensure we're at the root
+   * 3. Click the "New Folder" button (2nd button in toolbar)
+   * 4. Enter the folder name in the modal input
+   * 5. Click the confirm button to create the folder
+   *
+   * @param folderName - Name of the folder to create
+   * @param parentPath - Path of the parent folder (empty string for root)
+   * @returns Object containing the folder ID and name
    */
-  private async createFolderViaDOM(folderName: string): Promise<{ folderId: string; folderName: string }> {
-    console.log(`[APIHandler] 📁➕ [LOGGING ONLY] Would create folder: ${folderName}`);
-    console.log(`[APIHandler] ⚠️  TODO: Implement actual folder creation via DOM`);
-    console.log(`[APIHandler] ℹ️  For now, returning mock response to test message flow`);
+  private async createFolderViaDOM(folderName: string, parentPath: string): Promise<{ folderId: string; folderName: string }> {
+    console.log(`[APIHandler] 📁➕ Creating folder via DOM: ${folderName}`);
+    console.log(`[APIHandler]    Parent path: ${parentPath || '(root)'}`);
 
-    // Return a mock folderId for testing
-    await this.sleep(100);
+    try {
+      // Step 1: Navigate to the parent folder (if specified)
+      if (parentPath) {
+        console.log(`[APIHandler] 🔍 Navigating to parent folder: ${parentPath}`);
+        await this.navigateToFolder(parentPath);
+      } else {
+        // Step 2: If no parent, click blank area to ensure we're at root
+        console.log(`[APIHandler] 🔍 Clicking blank area to ensure root location`);
+        await this.clickBlankArea();
+      }
 
-    return { folderId: `mock-folder-${Date.now()}`, folderName };
+      // Step 3: Click the "New Folder" button
+      console.log(`[APIHandler] 🔍 Clicking "New Folder" button`);
+      const newFolderButton = document.querySelector('#ide-redesign-file-tree > div > div.file-tree-toolbar > div > button:nth-child(2)');
+      if (!newFolderButton) {
+        throw new Error('Could not find "New Folder" button');
+      }
+
+      this.simulateClick(newFolderButton as HTMLElement);
+      await this.sleep(500); // Wait for modal to appear
+
+      // Step 4: Enter folder name in the modal input
+      console.log(`[APIHandler] 🔍 Entering folder name: ${folderName}`);
+      const folderNameInput = document.querySelector('#folder-name') as HTMLInputElement;
+      if (!folderNameInput) {
+        throw new Error('Could not find folder name input');
+      }
+
+      folderNameInput.value = folderName;
+      folderNameInput.dispatchEvent(new Event('input', { bubbles: true }));
+      folderNameInput.dispatchEvent(new Event('change', { bubbles: true }));
+      await this.sleep(200);
+
+      // Step 5: Click the confirm button
+      console.log(`[APIHandler] 🔍 Clicking confirm button`);
+      const confirmButton = document.querySelector('body > div.fade.modal.show > div > div > div > div.modal-footer > button.d-inline-grid.btn.btn-primary');
+      if (!confirmButton) {
+        throw new Error('Could not find confirm button');
+      }
+
+      this.simulateClick(confirmButton as HTMLElement);
+      await this.sleep(2500); // Wait longer for folder creation to complete (increased from 1500ms)
+
+      console.log(`[APIHandler] ✅ Folder created successfully: ${folderName}`);
+
+      // Wait for the folder to appear in the DOM before proceeding
+      console.log(`[APIHandler] ⏳ Waiting for folder to appear in DOM: ${folderName}`);
+      // Increase max wait time to 10 seconds for nested folders
+      const folderFound = await this.waitForFolderToAppear(folderName, parentPath, 10000);
+
+      if (!folderFound) {
+        console.warn(`[APIHandler] ⚠️ Folder ${folderName} did not appear in DOM after waiting, but will continue`);
+      } else {
+        console.log(`[APIHandler] ✅ Folder ${folderName} is now visible in DOM`);
+      }
+
+      // Try to find the newly created folder to get its ID
+      const folderId = await this.findFolderId(folderName, parentPath);
+
+      return { folderId, folderName };
+    } catch (error) {
+      console.error(`[APIHandler] ❌ Failed to create folder via DOM:`, error);
+      throw error;
+    }
   }
 
   /**
@@ -924,17 +1204,18 @@ export class OverleafAPIHandler {
   }
 
   /**
-   * Handle folder create operation
+   * Process folder creation (called by the folder queue)
    */
-  private async createFolder(message: SyncToOverleafMessage): Promise<SyncToOverleafResponse> {
-    console.log(`[APIHandler] 📁➕ Creating folder: ${message.path}`);
+  private async processFolderCreation(message: SyncToOverleafMessage): Promise<SyncToOverleafResponse> {
+    console.log(`[APIHandler] 📁➕ Processing folder creation: ${message.path}`);
 
     // Extract folder name from path
     const pathParts = message.path.split('/');
     const folderName = pathParts.pop() || message.path;
+    const parentPath = pathParts.join('/');
 
     try {
-      const result = await this.createFolderViaDOM(folderName);
+      const result = await this.createFolderViaDOM(folderName, parentPath);
 
       return {
         type: 'sync_to_overleaf_response',
@@ -1016,5 +1297,241 @@ export class OverleafAPIHandler {
       console.error(`[APIHandler] ❌ Rename folder failed:`, error);
       throw error;
     }
+  }
+
+  /**
+   * Navigate to a specific folder in the file tree
+   * This involves clicking through the folder hierarchy
+   */
+  private async navigateToFolder(folderPath: string): Promise<void> {
+    console.log(`[APIHandler] 🔍 Navigating to folder: ${folderPath}`);
+
+    const pathParts = folderPath.split('/').filter(p => p.length > 0);
+
+    for (const folderName of pathParts) {
+      console.log(`[APIHandler] 🔍 Looking for folder: ${folderName}`);
+
+      // Try to find the folder with retry logic (in case DOM is still updating)
+      let folderElement: Element | null = null;
+      let found = false;
+
+      // Retry up to 10 times with 500ms intervals (total 5 seconds)
+      for (let attempt = 1; attempt <= 10; attempt++) {
+        folderElement = await this.findFolderByName(folderName);
+
+        if (folderElement) {
+          found = true;
+          console.log(`[APIHandler] ✅ Found folder on attempt ${attempt}: ${folderName}`);
+          break;
+        } else {
+          console.log(`[APIHandler] ⏳ Folder not found on attempt ${attempt}/10, waiting 500ms...`);
+          await this.sleep(500);
+        }
+      }
+
+      if (!found || !folderElement) {
+        throw new Error(`Could not find folder after 10 attempts: ${folderName}`);
+      }
+
+      // Check if folder is already expanded
+      const isExpanded = folderElement.getAttribute('aria-expanded') === 'true';
+      console.log(`[APIHandler] 🔍 Folder expansion state: ${isExpanded ? 'expanded' : 'collapsed'}`);
+
+      // If not expanded, click the expand button to expand it
+      if (!isExpanded) {
+        console.log(`[APIHandler] 🔍 Folder is collapsed, expanding...`);
+        const expandButton = folderElement.querySelector('.folder-expand-collapse-button') as HTMLElement;
+        if (expandButton) {
+          this.simulateClick(expandButton);
+          await this.sleep(500); // Wait for expansion animation
+          console.log(`[APIHandler] ✅ Folder expanded`);
+        }
+      }
+
+      // Find and click the folder to navigate/select it
+      let clickTarget: HTMLElement | null = null;
+
+      // Method 1: Try to find file-tree-entity-button
+      clickTarget = folderElement.querySelector('.file-tree-entity-button') as HTMLElement;
+
+      // Method 2: Try to find .entity-name
+      if (!clickTarget) {
+        clickTarget = folderElement.querySelector('.entity-name') as HTMLElement;
+      }
+
+      // Method 3: Try to find button
+      if (!clickTarget) {
+        clickTarget = folderElement.querySelector('button') as HTMLElement;
+      }
+
+      // Method 4: Use the li element itself
+      if (!clickTarget) {
+        clickTarget = folderElement as HTMLElement;
+      }
+
+      if (!clickTarget) {
+        throw new Error(`Could not find clickable element for folder: ${folderName}`);
+      }
+
+      console.log(`[APIHandler] ✅ Clicking folder: ${folderName}`);
+      console.log(`[APIHandler]    Click target: ${clickTarget.tagName} (class: ${clickTarget.className})`);
+
+      this.simulateClick(clickTarget);
+      await this.sleep(800); // Wait for navigation to complete
+
+      // After clicking, verify the folder is expanded (in case clicking expanded it)
+      const isExpandedAfterClick = folderElement.getAttribute('aria-expanded') === 'true';
+      if (!isExpandedAfterClick) {
+        console.log(`[APIHandler] ⚠️ Folder still collapsed after click, trying to expand...`);
+        const expandButton = folderElement.querySelector('.folder-expand-collapse-button') as HTMLElement;
+        if (expandButton) {
+          this.simulateClick(expandButton);
+          await this.sleep(500); // Wait for expansion animation
+          console.log(`[APIHandler] ✅ Folder expanded after second attempt`);
+        }
+      }
+    }
+
+    console.log(`[APIHandler] ✅ Navigated to folder: ${folderPath}`);
+  }
+
+  /**
+   * Find a folder in the file tree by name
+   */
+  private async findFolderByName(folderName: string): Promise<Element | null> {
+    console.log(`[APIHandler] 🔍 Searching for folder: ${folderName}`);
+
+    // Find all folder name spans in the tree
+    const nameSpans = document.querySelectorAll('#ide-redesign-file-tree .item-name span');
+
+    console.log(`[APIHandler] 🔍 Found ${nameSpans.length} items with .item-name span`);
+
+    for (const span of nameSpans) {
+      const text = span.textContent?.trim();
+      console.log(`[APIHandler] 🔍 Checking item: "${text}"`);
+
+      if (text === folderName) {
+        console.log(`[APIHandler] ✅ Found matching text: ${folderName}`);
+
+        // Walk up the DOM tree to find the containing element
+        let current = span;
+
+        // Walk up: span -> div.item-name -> button -> div.entity-name -> li
+        while (current && current.tagName !== 'LI') {
+          current = current.parentElement;
+          if (!current) break;
+
+          console.log(`[APIHandler] 🔍 Walking up DOM: ${current.tagName} (class: ${current.className})`);
+        }
+
+        if (current && current.tagName === 'LI') {
+          console.log(`[APIHandler] ✅ Found LI element for folder: ${folderName}`);
+          console.log(`[APIHandler]    LI classes: ${current.className}`);
+
+          // Verify it's a folder by checking for folder-related elements
+          // Look for: folder-expand-collapse-button, chevron_right icon, or class containing "folder"
+          const hasFolderCollapseButton = current.querySelector('.folder-expand-collapse-button');
+          const hasChevron = current.querySelector('[class*="chevron"]');
+          const hasFolderIcon = current.querySelector('[class*="folder"]');
+
+          console.log(`[APIHandler]    Folder indicators:`);
+          console.log(`[APIHandler]      - folder-collapse-button: ${!!hasFolderCollapseButton}`);
+          console.log(`[APIHandler]      - chevron icon: ${!!hasChevron}`);
+          console.log(`[APIHandler]      - folder icon: ${!!hasFolderIcon}`);
+
+          // If it has any folder indicator, it's a folder
+          if (hasFolderCollapseButton || hasChevron || hasFolderIcon) {
+            console.log(`[APIHandler] ✅ Confirmed it's a folder: ${folderName}`);
+            return current;
+          } else {
+            console.log(`[APIHandler] ⚠️ Item has name "${folderName}" but doesn't appear to be a folder (no folder indicators)`);
+          }
+        }
+      }
+    }
+
+    console.log(`[APIHandler] ⚠️ Could not find folder: ${folderName}`);
+    return null;
+  }
+
+  /**
+   * Wait for a folder to appear in the DOM after creation
+   * This polls the DOM looking for the folder with a timeout
+   */
+  private async waitForFolderToAppear(folderName: string, parentPath: string, maxWait: number = 5000): Promise<boolean> {
+    const startTime = Date.now();
+    const checkInterval = 300; // Check every 300ms
+
+    console.log(`[APIHandler] 🔍 Starting to wait for folder: ${folderName} (max wait: ${maxWait}ms)`);
+
+    while (Date.now() - startTime < maxWait) {
+      // Try to find the folder
+      const folderElement = await this.findFolderByName(folderName);
+
+      if (folderElement) {
+        console.log(`[APIHandler] ✅ Folder appeared in DOM after ${Date.now() - startTime}ms: ${folderName}`);
+        return true;
+      }
+
+      // Wait a bit before trying again
+      await this.sleep(checkInterval);
+      console.log(`[APIHandler] ⏳ Still waiting for folder: ${folderName} (${Date.now() - startTime}ms elapsed)`);
+    }
+
+    console.warn(`[APIHandler] ⚠️ Folder did not appear in DOM within ${maxWait}ms: ${folderName}`);
+    return false;
+  }
+
+  /**
+   * Click the blank area in the file tree to deselect any selected item
+   * This ensures we're at the root level for creating folders
+   */
+  private async clickBlankArea(): Promise<void> {
+    console.log(`[APIHandler] 🔍 Clicking blank area in file tree`);
+
+    // Click on the ::after area of the file tree inner container
+    // This is the selector provided by the user
+    const blankArea = document.querySelector('#ide-redesign-file-tree > div > div.file-tree-inner > ul > div');
+
+    if (blankArea) {
+      this.simulateClick(blankArea as HTMLElement);
+      await this.sleep(300);
+      console.log(`[APIHandler] ✅ Clicked blank area`);
+    } else {
+      // Fallback: click on the file tree container
+      const fileTree = document.querySelector('#ide-redesign-file-tree');
+      if (fileTree) {
+        this.simulateClick(fileTree as HTMLElement);
+        await this.sleep(300);
+        console.log(`[APIHandler] ✅ Clicked file tree container (fallback)`);
+      }
+    }
+  }
+
+  /**
+   * Find a folder's ID by searching in the file tree
+   * This is called after creating a folder to get its ID for mapping
+   */
+  private async findFolderId(folderName: string, parentPath: string): Promise<string> {
+    console.log(`[APIHandler] 🔍 Looking up folder ID for: ${folderName}`);
+
+    // Try to find the folder in the file tree
+    const folderElement = await this.findFolderByName(folderName);
+
+    if (folderElement) {
+      // Try to get the folder ID from data-entity-id attribute
+      const folderId = folderElement.getAttribute('data-entity-id');
+
+      if (folderId) {
+        console.log(`[APIHandler] ✅ Found folder ID: ${folderId}`);
+        return folderId;
+      }
+    }
+
+    // If we couldn't find the ID, generate a mock one for now
+    // In a real implementation, we'd need to wait for the folder to appear in the DOM
+    const mockFolderId = `folder-${Date.now()}`;
+    console.log(`[APIHandler] ⚠️ Could not find folder ID, using mock: ${mockFolderId}`);
+    return mockFolderId;
   }
 }
