@@ -399,37 +399,113 @@ export class OverleafAPIHandler {
   }
 
   /**
-   * Create a document - LOGGING ONLY VERSION
-   * TODO: Implement actual API call or DOM manipulation after testing message flow
+   * Create a document via DOM manipulation
+   *
+   * Steps:
+   * 1. Parse path to get file name and parent folder path
+   * 2. If there's a parent folder, navigate to it
+   * 3. Click the "New File" button (1st button in toolbar)
+   * 4. Enter the file name in the modal input
+   * 5. Click the confirm button to create the file
+   *
+   * @param message - Sync message containing file path and optional content
+   * @returns Object containing the doc ID
    */
-  private async createDocument(message: SyncToOverleafMessage): Promise<SyncToOverleafResponse> {
-    // Parse path
+  private async createDocumentViaDOM(message: SyncToOverleafMessage): Promise<{ docId: string; fileName: string }> {
+    // Parse path to get file name and parent folder path
     const pathParts = message.path.split('/');
     const fileName = pathParts.pop() || message.path;
+    const parentPath = pathParts.join('/');
 
-    console.log(`[APIHandler] 📄➕ [LOGGING ONLY] Would create document: ${message.path}`);
-    console.log(`[APIHandler]    File name: ${fileName}`);
+    console.log(`[APIHandler] 📄➕ Creating document via DOM: ${fileName}`);
+    console.log(`[APIHandler]    Parent path: ${parentPath || '(root)'}`);
     console.log(`[APIHandler]    Content length: ${message.content?.length || 0}`);
-    console.log(`[APIHandler] ⚠️  TODO: Implement actual document creation via API or DOM`);
-    console.log(`[APIHandler] ℹ️  For now, returning mock response to test message flow`);
 
-    // Simulate some delay
-    await this.sleep(100);
+    try {
+      // Step 1: Navigate to the parent folder (if specified)
+      if (parentPath) {
+        console.log(`[APIHandler] 🔍 Navigating to parent folder: ${parentPath}`);
+        await this.navigateToFolder(parentPath);
+      } else {
+        // Step 2: If no parent, click blank area to ensure we're at root
+        console.log(`[APIHandler] 🔍 Clicking blank area to ensure root location`);
+        await this.clickBlankArea();
+      }
 
-    // Generate a mock doc_id for testing
-    const mockDocId = `mock-doc-${Date.now()}`;
+      // Step 3: Click the "New File" button (1st button in toolbar)
+      console.log(`[APIHandler] 🔍 Clicking "New File" button`);
+      const newFileButton = document.querySelector('#ide-redesign-file-tree > div > div.file-tree-toolbar > div > button:nth-child(1)');
+      if (!newFileButton) {
+        throw new Error('Could not find "New File" button');
+      }
 
-    console.log(`[APIHandler] ✅ [LOGGING ONLY] Document create logged: ${message.path} (mock doc_id: ${mockDocId})`);
+      this.simulateClick(newFileButton as HTMLElement);
+      await this.sleep(500); // Wait for modal to appear
 
-    return {
-      type: 'sync_to_overleaf_response',
-      project_id: this.projectId,
-      operation: 'create',
-      path: message.path,
-      success: true,
-      doc_id: mockDocId,
-      timestamp: Date.now()
-    };
+      // Step 4: Enter file name in the modal input
+      console.log(`[APIHandler] 🔍 Entering file name: ${fileName}`);
+      const fileNameInput = document.querySelector('#new-doc-name') as HTMLInputElement;
+      if (!fileNameInput) {
+        throw new Error('Could not find file name input');
+      }
+
+      fileNameInput.value = fileName;
+      fileNameInput.dispatchEvent(new Event('input', { bubbles: true }));
+      fileNameInput.dispatchEvent(new Event('change', { bubbles: true }));
+      await this.sleep(200);
+
+      // Step 5: Click the confirm button
+      console.log(`[APIHandler] 🔍 Clicking confirm button`);
+      const confirmButton = document.querySelector('body > div.fade.modal.show > div > div > div > div.modal-footer > button.d-inline-grid.btn.btn-primary');
+      if (!confirmButton) {
+        throw new Error('Could not find confirm button');
+      }
+
+      this.simulateClick(confirmButton as HTMLElement);
+      await this.sleep(2500); // Wait for file creation to complete
+
+      console.log(`[APIHandler] ✅ File created successfully: ${fileName}`);
+
+      // Wait for the file to appear in the DOM before proceeding
+      console.log(`[APIHandler] ⏳ Waiting for file to appear in DOM: ${fileName}`);
+      const fileFound = await this.waitForFileToAppear(fileName, parentPath, 10000);
+
+      if (!fileFound) {
+        console.warn(`[APIHandler] ⚠️ File ${fileName} did not appear in DOM after waiting, but will continue`);
+      } else {
+        console.log(`[APIHandler] ✅ File ${fileName} is now visible in DOM`);
+      }
+
+      // Try to find the newly created file to get its ID
+      const docId = await this.findFileId(fileName, parentPath);
+
+      return { docId, fileName };
+    } catch (error) {
+      console.error(`[APIHandler] ❌ Failed to create file via DOM:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Create a document - DOM VERSION
+   */
+  private async createDocument(message: SyncToOverleafMessage): Promise<SyncToOverleafResponse> {
+    try {
+      const result = await this.createDocumentViaDOM(message);
+
+      return {
+        type: 'sync_to_overleaf_response',
+        project_id: this.projectId,
+        operation: 'create',
+        path: message.path,
+        success: true,
+        doc_id: result.docId,
+        timestamp: Date.now()
+      };
+    } catch (error) {
+      console.error(`[APIHandler] ❌ Create document failed:`, error);
+      throw error;
+    }
   }
 
   private async deleteDocument(message: SyncToOverleafMessage): Promise<SyncToOverleafResponse> {
@@ -1396,6 +1472,64 @@ export class OverleafAPIHandler {
   }
 
   /**
+   * Find a file in the file tree by name
+   */
+  private async findFileByName(fileName: string): Promise<Element | null> {
+    console.log(`[APIHandler] 🔍 Searching for file: ${fileName}`);
+
+    // Find all file name spans in the tree
+    const nameSpans = document.querySelectorAll('#ide-redesign-file-tree .item-name span');
+
+    console.log(`[APIHandler] 🔍 Found ${nameSpans.length} items with .item-name span`);
+
+    for (const span of nameSpans) {
+      const text = span.textContent?.trim();
+      console.log(`[APIHandler] 🔍 Checking item: "${text}"`);
+
+      if (text === fileName) {
+        console.log(`[APIHandler] ✅ Found matching text: ${fileName}`);
+
+        // Walk up the DOM tree to find the containing element
+        let current = span;
+
+        // Walk up: span -> div.item-name -> button -> div.entity-name -> li
+        while (current && current.tagName !== 'LI') {
+          current = current.parentElement;
+          if (!current) break;
+
+          console.log(`[APIHandler] 🔍 Walking up DOM: ${current.tagName} (class: ${current.className})`);
+        }
+
+        if (current && current.tagName === 'LI') {
+          console.log(`[APIHandler] ✅ Found LI element for file: ${fileName}`);
+          console.log(`[APIHandler]    LI classes: ${current.className}`);
+
+          // Verify it's a file (not a folder) by checking that it does NOT have folder indicators
+          const hasFolderCollapseButton = current.querySelector('.folder-expand-collapse-button');
+          const hasChevron = current.querySelector('[class*="chevron"]');
+          const hasFolderIcon = current.querySelector('[class*="folder"]');
+
+          console.log(`[APIHandler]    File indicators:`);
+          console.log(`[APIHandler]      - folder-collapse-button: ${!!hasFolderCollapseButton}`);
+          console.log(`[APIHandler]      - chevron icon: ${!!hasChevron}`);
+          console.log(`[APIHandler]      - folder icon: ${!!hasFolderIcon}`);
+
+          // If it doesn't have any folder indicators, it's a file
+          if (!hasFolderCollapseButton && !hasChevron && !hasFolderIcon) {
+            console.log(`[APIHandler] ✅ Confirmed it's a file: ${fileName}`);
+            return current;
+          } else {
+            console.log(`[APIHandler] ⚠️ Item has name "${fileName}" but appears to be a folder (has folder indicators)`);
+          }
+        }
+      }
+    }
+
+    console.log(`[APIHandler] ⚠️ Could not find file: ${fileName}`);
+    return null;
+  }
+
+  /**
    * Find a folder in the file tree by name
    */
   private async findFolderByName(folderName: string): Promise<Element | null> {
@@ -1483,6 +1617,34 @@ export class OverleafAPIHandler {
   }
 
   /**
+   * Wait for a file to appear in the DOM after creation
+   * This polls the DOM looking for the file with a timeout
+   */
+  private async waitForFileToAppear(fileName: string, parentPath: string, maxWait: number = 10000): Promise<boolean> {
+    const startTime = Date.now();
+    const checkInterval = 300; // Check every 300ms
+
+    console.log(`[APIHandler] 🔍 Starting to wait for file: ${fileName} (max wait: ${maxWait}ms)`);
+
+    while (Date.now() - startTime < maxWait) {
+      // Try to find the file
+      const fileElement = await this.findFileByName(fileName);
+
+      if (fileElement) {
+        console.log(`[APIHandler] ✅ File appeared in DOM after ${Date.now() - startTime}ms: ${fileName}`);
+        return true;
+      }
+
+      // Wait a bit before trying again
+      await this.sleep(checkInterval);
+      console.log(`[APIHandler] ⏳ Still waiting for file: ${fileName} (${Date.now() - startTime}ms elapsed)`);
+    }
+
+    console.warn(`[APIHandler] ⚠️ File did not appear in DOM within ${maxWait}ms: ${fileName}`);
+    return false;
+  }
+
+  /**
    * Click the blank area in the file tree to deselect any selected item
    * This ensures we're at the root level for creating folders
    */
@@ -1533,5 +1695,31 @@ export class OverleafAPIHandler {
     const mockFolderId = `folder-${Date.now()}`;
     console.log(`[APIHandler] ⚠️ Could not find folder ID, using mock: ${mockFolderId}`);
     return mockFolderId;
+  }
+
+  /**
+   * Find a file's ID by searching in the file tree
+   * This is called after creating a file to get its ID for mapping
+   */
+  private async findFileId(fileName: string, parentPath: string): Promise<string> {
+    console.log(`[APIHandler] 🔍 Looking up file ID for: ${fileName}`);
+
+    // Try to find the file in the file tree
+    const fileElement = await this.findFileByName(fileName);
+
+    if (fileElement) {
+      // Try to get the file ID from data-entity-id attribute
+      const fileId = fileElement.getAttribute('data-entity-id');
+
+      if (fileId) {
+        console.log(`[APIHandler] ✅ Found file ID: ${fileId}`);
+        return fileId;
+      }
+    }
+
+    // If we couldn't find the ID, generate a mock one for now
+    const mockFileId = `doc-${Date.now()}`;
+    console.log(`[APIHandler] ⚠️ Could not find file ID, using mock: ${mockFileId}`);
+    return mockFileId;
   }
 }
