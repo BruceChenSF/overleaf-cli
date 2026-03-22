@@ -38,3 +38,16 @@ export interface APIRequest {
   body?: any;
   headers?: Record<string, string>;
 }
+
+/**
+ * Terminal position settings
+ */
+export type TerminalPosition = 'left' | 'right' | 'bottom';
+
+/**
+ * Terminal settings stored in chrome.storage
+ */
+export interface TerminalSettings {
+  position: TerminalPosition;
+  sizes: Record<TerminalPosition, number>;
+}
