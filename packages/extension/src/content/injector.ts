@@ -4,6 +4,12 @@ import { OverleafWebSocketClient } from './overleaf-sync';
 import { OverleafAPIHandler } from './overleaf-api-handler';
 import { toggleDrawer, autoStartTerminal, cleanup as cleanupTerminal } from './terminal-drawer';
 
+/**
+ * Storage keys
+ */
+const WORKING_DIR_KEY = 'working_dir';
+const TERMINAL_MODAL_KEY = 'terminal_modal_shown';
+
 // 🔔 立即输出日志，确认脚本已加载
 console.log('[Mirror] ✅ Content script loaded!');
 console.log('[Mirror] Current URL:', window.location.href);
@@ -320,11 +326,32 @@ async function initializeMirror(): Promise<void> {
 
     // Register message handler
     mirrorClient.onMessage((message: any) => {
+      console.log('[Mirror] 📨 Received message type:', message.type, message);
+
       if (message.type === 'sync_to_overleaf') {
         console.log('[Mirror] Received sync_to_overleaf request:', message);
         apiHandler.handleSyncRequest(message).catch((error) => {
           console.error('[Mirror] ❌ Error handling sync request:', error);
         });
+      } else if (message.type === 'sync_complete') {
+        console.log('[Mirror] ✅ Received sync_complete message:', message);
+        if (message.working_dir) {
+          console.log('[Mirror] 📁 Working directory received:', message.working_dir);
+          // Save working directory to chrome.storage
+          if (typeof chrome !== 'undefined' && chrome.storage) {
+            chrome.storage.local.set({
+              'working_dir': message.working_dir
+            }, () => {
+              if (chrome.runtime.lastError) {
+                console.error('[Mirror] ❌ Failed to save working dir:', chrome.runtime.lastError);
+              } else {
+                console.log('[Mirror] ✅ Working directory saved to chrome.storage');
+              }
+            });
+          }
+        } else {
+          console.warn('[Mirror] ⚠️ sync_complete message has no working_dir field');
+        }
       }
     });
 
@@ -720,12 +747,235 @@ function createClaudeButton(): HTMLElement {
   `;
 
   button.addEventListener('click', () => {
-    console.log('[Mirror] Claude button clicked!');
-    toggleDrawer();
+    console.log('[Mirror] Terminal button clicked!');
+    showTerminalModal();
   });
 
   wrapper.appendChild(button);
   return wrapper;
+}
+
+/**
+ * Show terminal options modal
+ */
+function showTerminalModal(): void {
+  console.log('[Mirror] 🖱️ Terminal button clicked, showing modal...');
+
+  // Check if modal already exists
+  let modal = document.getElementById('mirror-terminal-modal');
+  if (modal) {
+    // Remove existing modal
+    modal.remove();
+  }
+
+  // Get working directory with fallback
+  chrome.storage.local.get([WORKING_DIR_KEY], (result) => {
+    const workingDir = result[WORKING_DIR_KEY];
+    console.log('[Mirror] 📦 Retrieved from storage:', workingDir);
+
+    if (!workingDir) {
+      console.warn('[Mirror] Working directory not found, showing modal with loading state');
+      createTerminalModal('Loading...');
+
+      // Poll for working directory
+      let attempts = 0;
+      const pollInterval = setInterval(() => {
+        attempts++;
+        console.log(`[Mirror] 🔍 Polling for working directory (attempt ${attempts}/10)...`);
+        chrome.storage.local.get([WORKING_DIR_KEY], (pollResult) => {
+          const polledWorkingDir = pollResult[WORKING_DIR_KEY];
+          console.log(`[Mirror] 🔍 Poll attempt ${attempts}:`, polledWorkingDir);
+
+          if (polledWorkingDir && attempts < 10) {
+            clearInterval(pollInterval);
+            const existingModal = document.getElementById('mirror-terminal-modal');
+            if (existingModal) {
+              existingModal.remove();
+            }
+            createTerminalModal(polledWorkingDir);
+          } else if (attempts >= 10) {
+            clearInterval(pollInterval);
+            console.warn('[Mirror] Working directory still not loaded after polling');
+          }
+        });
+      }, 500);
+    } else {
+      createTerminalModal(workingDir);
+    }
+  });
+}
+
+/**
+ * Create terminal modal with working directory
+ */
+function createTerminalModal(workingDir: string): void {
+  const modal = document.createElement('div');
+  modal.id = 'mirror-terminal-modal';
+  modal.style.cssText = `
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 999999;
+  `;
+
+  const modalContent = document.createElement('div');
+  modalContent.className = 'modal-content';
+  modalContent.style.cssText = `
+    background: #2d2d2d;
+    border-radius: 8px;
+    padding: 24px;
+    min-width: 500px;
+    max-width: 600px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    color: rgb(244, 245, 246);
+  `;
+
+  // First row: copy path
+  const firstRow = document.createElement('div');
+  firstRow.style.cssText = 'margin-bottom: 16px;';
+
+  const firstLabel = document.createElement('div');
+  firstLabel.textContent = '复制此路径并在你的 AI 工具中打开，开始 Claude Code';
+  firstLabel.style.cssText = 'margin-bottom: 8px; line-height: 1.5;';
+
+  const firstInputRow = document.createElement('div');
+  firstInputRow.style.cssText = 'display: flex; align-items: center; gap: 8px;';
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.id = 'mirror-working-dir-input';
+  input.value = workingDir;
+  input.readOnly = true;
+  input.style.cssText = `
+    flex: 1;
+    padding: 8px 12px;
+    background: #1a1a1a;
+    border: 1px solid #404040;
+    border-radius: 4px;
+    color: rgb(244, 245, 246);
+    font-size: 14px;
+    font-family: monospace;
+    cursor: pointer;
+  `;
+
+  const copyBtn = document.createElement('button');
+  copyBtn.id = 'mirror-copy-path-btn';
+  copyBtn.textContent = '复制';
+  copyBtn.style.cssText = `
+    padding: 8px 16px;
+    background: #3b82f6;
+    border: none;
+    border-radius: 4px;
+    color: white;
+    font-size: 14px;
+    cursor: pointer;
+    font-weight: 500;
+    white-space: nowrap;
+  `;
+
+  // Add hover effects using event listeners
+  copyBtn.addEventListener('mouseenter', () => {
+    copyBtn.style.background = '#2563eb';
+  });
+  copyBtn.addEventListener('mouseleave', () => {
+    copyBtn.style.background = '#3b82f6';
+  });
+
+  firstInputRow.appendChild(input);
+  firstInputRow.appendChild(copyBtn);
+  firstRow.appendChild(firstLabel);
+  firstRow.appendChild(firstInputRow);
+
+  // Second row: open terminal
+  const secondRow = document.createElement('div');
+  secondRow.style.cssText = 'margin-bottom: 16px;';
+
+  const secondLabel = document.createElement('div');
+  secondLabel.textContent = '或者在 Overleaf 中直接运行内嵌终端';
+  secondLabel.style.cssText = 'margin-bottom: 8px; line-height: 1.5;';
+
+  const openBtn = document.createElement('button');
+  openBtn.id = 'mirror-open-terminal-btn';
+  openBtn.textContent = '在 Overleaf 中打开终端';
+  openBtn.style.cssText = `
+    padding: 10px 20px;
+    background: #22c55e;
+    border: none;
+    border-radius: 4px;
+    color: white;
+    font-size: 14px;
+    cursor: pointer;
+    font-weight: 500;
+    white-space: nowrap;
+  `;
+
+  openBtn.addEventListener('mouseenter', () => {
+    openBtn.style.background = '#16a34a';
+  });
+  openBtn.addEventListener('mouseleave', () => {
+    openBtn.style.background = '#22c55e';
+  });
+
+  secondRow.appendChild(secondLabel);
+  secondRow.appendChild(openBtn);
+
+  modalContent.appendChild(firstRow);
+  modalContent.appendChild(secondRow);
+  modal.appendChild(modalContent);
+  document.body.appendChild(modal);
+
+  // Add event listeners after modal is added to DOM
+  setTimeout(() => {
+    // Input click handler
+    input.addEventListener('click', () => {
+      input.select();
+    });
+
+    // Copy button handler
+    copyBtn.addEventListener('click', () => {
+      const inputElem = document.getElementById('mirror-working-dir-input') as HTMLInputElement;
+      if (inputElem) {
+        inputElem.select();
+        navigator.clipboard.writeText(inputElem.value).then(() => {
+          // Show copied feedback
+          const originalText = copyBtn.textContent;
+          copyBtn.textContent = '已复制!';
+          copyBtn.style.background = '#16a34a';
+          setTimeout(() => {
+            copyBtn.textContent = originalText;
+            copyBtn.style.background = '#3b82f6';
+          }, 1500);
+        }).catch(err => {
+          console.error('[Mirror] Failed to copy:', err);
+        });
+      }
+    });
+
+    // Open terminal button handler
+    openBtn.addEventListener('click', () => {
+      // Close modal and open terminal
+      const modalElem = document.getElementById('mirror-terminal-modal');
+      if (modalElem) {
+        modalElem.remove();
+      }
+      toggleDrawer();
+    });
+
+    // Close modal when clicking outside
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) {
+        modal.remove();
+      }
+    });
+  }, 0);
+
+  console.log('[Mirror] Terminal modal shown with working dir:', workingDir);
 }
 
 /**

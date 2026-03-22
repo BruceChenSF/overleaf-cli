@@ -992,6 +992,19 @@ export class MirrorServer {
     console.log(`[Server] ✅ Initial sync complete for project: ${projectId}`);
     console.log(`[Server] 🚀 Enabling file monitoring for project: ${projectId}`);
 
+    // Get working directory for this project
+    const projectConfig = this.configStore.getProjectConfig(projectId);
+    const workingDir = projectConfig.localPath;
+    console.log(`[Server] 📁 Working directory for project ${projectId}: ${workingDir}`);
+
+    // Send working directory to frontend
+    this.broadcastToExtensions({
+      type: 'sync_complete',
+      project_id: projectId,
+      working_dir: workingDir,
+      timestamp: Date.now()
+    });
+
     // Enable file watching for this project
     const fileWatcher = this.fileWatchers.get(projectId);
     if (fileWatcher) {
