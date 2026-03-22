@@ -61,16 +61,27 @@ export class FileWatcher {
     console.log(`[FileWatcher] Starting file watcher for project ${this.projectId}`);
     console.log(`[FileWatcher] Watching directory: ${this.projectDir}`);
 
+    // 🔧 Detect platform to choose appropriate watching strategy
+    const isWindows = process.platform === 'win32';
+
     this.watcher = chokidar.watch(this.projectDir, {
       ignored: /(^|[\/\\])\../, // ignore dotfiles
       persistent: true,
       ignoreInitial: true, // Don't trigger for existing files
       awaitWriteFinish: true, // 🔧 Wait for write completion before triggering event
-      usePolling: false, // 🔧 Use native file watching (more efficient, less false positives)
-      atomic: 1000, // 🔧 Wait 1s after last change before considering write complete (reduces duplicate events)
+      usePolling: isWindows, // 🔧 Use polling on Windows to avoid file handle locks
+      atomic: isWindows ? undefined : 1000, // 🔧 Disable atomic on Windows when using polling
+      interval: 1000, // Polling interval (ms) - only used when usePolling is true
+      binaryInterval: 1000, // Binary file polling interval (ms)
       followSymlinks: false, // Don't follow symbolic links
       depth: 99 // Watch subdirectories
     });
+
+    if (isWindows) {
+      console.log(`[FileWatcher] ⚠️ Windows detected: using polling mode to avoid file handle locks during rename operations`);
+    } else {
+      console.log(`[FileWatcher] ✅ Non-Windows platform: using native file watching for better performance`);
+    }
 
     this.watcher
       .on('add', (path) => {
