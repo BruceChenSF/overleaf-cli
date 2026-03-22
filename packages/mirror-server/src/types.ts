@@ -19,6 +19,7 @@ export type WSMessage =
   | DirectoryCreatedMessage
   | DirectoryRenamedMessage
   | DirectoryDeletedMessage
+  | ExistingFoldersMessage
   | SyncToOverleafMessage
   | SyncToOverleafResponse;
 
@@ -52,6 +53,13 @@ export interface DirectoryDeletedMessage {
   project_id: string;
   path: string;
   folder_id: string;
+  timestamp: number;
+}
+
+export interface ExistingFoldersMessage {
+  type: 'existing_folders';
+  project_id: string;
+  folders: string[];  // List of folder paths that already exist
   timestamp: number;
 }
 

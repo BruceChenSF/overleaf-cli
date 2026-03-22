@@ -275,6 +275,20 @@ export class OverleafAPIHandler {
     });
   }
 
+  /**
+   * Mark multiple folders as created (for FolderQueue initialization)
+   * This is called after initial sync to prevent waiting for existing folders
+   *
+   * @param folderPaths - Array of folder paths that already exist
+   */
+  markFoldersAsCreated(folderPaths: string[]): void {
+    console.log(`[APIHandler] 📁 Marking ${folderPaths.length} folders as created`);
+    folderPaths.forEach(path => {
+      this.folderQueue.markFolderCreated(path);
+    });
+    console.log(`[APIHandler] ✅ FolderQueue initialized with ${folderPaths.length} existing folders`);
+  }
+
   private async retryWithBackoff<T>(
     fn: () => Promise<T>,
     context: string,
@@ -1580,6 +1594,10 @@ export class OverleafAPIHandler {
 
     try {
       await this.renameFolderViaDOM(message.folder_id, message.oldPath, newFolderName);
+
+      // 🔧 NEW: Update FolderQueue with new folder path
+      this.folderQueue.markFolderCreated(message.path);
+      console.log(`[APIHandler] 📁 Marked renamed folder as created: ${message.path}`);
 
       return {
         type: 'sync_to_overleaf_response',

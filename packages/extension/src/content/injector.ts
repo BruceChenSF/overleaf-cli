@@ -272,19 +272,16 @@ async function initializeMirror(): Promise<void> {
   setTimeout(() => {
     console.log('[Mirror] ⏰ Retry 1: injecting Claude button...');
     injectClaudeButton();
-    updateLoadingStatus('connecting');
   }, 1000);
 
   setTimeout(() => {
     console.log('[Mirror] ⏰ Retry 2: injecting Claude button...');
     injectClaudeButton();
-    updateLoadingStatus('connecting');
   }, 3000);
 
   setTimeout(() => {
     console.log('[Mirror] ⏰ Retry 3: injecting Claude button...');
     injectClaudeButton();
-    updateLoadingStatus('connecting');
   }, 5000);
 
   // 以下是 WebSocket 相关的初始化（可能失败）
@@ -333,6 +330,13 @@ async function initializeMirror(): Promise<void> {
         apiHandler.handleSyncRequest(message).catch((error) => {
           console.error('[Mirror] ❌ Error handling sync request:', error);
         });
+      } else if (message.type === 'existing_folders') {
+        // 🔧 NEW: Initialize FolderQueue with existing folders
+        console.log('[Mirror] 📁 Received existing_folders message:', message);
+        if (message.folders && Array.isArray(message.folders)) {
+          console.log('[Mirror] 📁 Marking', message.folders.length, 'folders as created');
+          apiHandler.markFoldersAsCreated(message.folders);
+        }
       } else if (message.type === 'sync_complete') {
         console.log('[Mirror] ✅ Received sync_complete message:', message);
         if (message.working_dir) {
@@ -549,6 +553,16 @@ async function requestInitialSync(): Promise<void> {
       timestamp: Date.now()
     });
     console.log('[Mirror] ✅ Initial sync complete message sent with folder mappings');
+
+    // 🔧 NEW: Notify extension about existing folders (for FolderQueue)
+    console.log('[Mirror] 📡 Notifying extension about existing folders...');
+    mirrorClient!.send({
+      type: 'existing_folders' as const,
+      project_id: projectId,
+      folders: Object.keys(folderMappings).map(folderId => folderMappings[folderId].path),
+      timestamp: Date.now()
+    });
+    console.log('[Mirror] ✅ Sent existing folders notification:', Object.keys(folderMappings).length, 'folders');
 
     // 🔧 Register callback for file operation events (keep connection alive)
     overleafWsClient.onChange(async (change) => {

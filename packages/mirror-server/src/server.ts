@@ -314,6 +314,13 @@ export class MirrorServer {
         console.log('[Server] ✅ Initial sync complete for project:', syncCompleteMsg.project_id);
         this.handleInitialSyncComplete(syncCompleteMsg.project_id, syncCompleteMsg.folder_mappings);
         break;
+      case 'existing_folders':
+        // 🔧 初始化已存在的文件夹列表（用于 FolderQueue）
+        // 转发给浏览器扩展处理
+        const existingFoldersMsg = message as any;
+        console.log('[Server] 📁 Received existing folders, forwarding to extension:', existingFoldersMsg.folders?.length || 0);
+        this.broadcastToExtensions(existingFoldersMsg);
+        break;
       case 'file_renamed':
         // 🔧 处理文件重命名
         const fileRenamedMsg = message as any;
