@@ -787,6 +787,18 @@ export class OverleafWebSocketClient {
   }
 
   /**
+   * Get folder mappings as a plain object (for sending to server)
+   * Returns an object mapping folder_id -> { path: string }
+   */
+  getFolderMappings(): Record<string, { path: string }> {
+    const mappings: Record<string, { path: string }> = {};
+    for (const [folderId, folderInfo] of this.folderIdToPath.entries()) {
+      mappings[folderId] = { path: folderInfo.path };
+    }
+    return mappings;
+  }
+
+  /**
    * Recursively update paths for all children (folders and files) under a renamed folder
    * This ensures that when a parent folder is renamed, all child entities have correct paths
    *

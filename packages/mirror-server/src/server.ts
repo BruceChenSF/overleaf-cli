@@ -312,7 +312,7 @@ export class MirrorServer {
         // 🔧 初始同步完成，启用文件监控
         const syncCompleteMsg = message as any;
         console.log('[Server] ✅ Initial sync complete for project:', syncCompleteMsg.project_id);
-        this.handleInitialSyncComplete(syncCompleteMsg.project_id);
+        this.handleInitialSyncComplete(syncCompleteMsg.project_id, syncCompleteMsg.folder_mappings);
         break;
       case 'file_renamed':
         // 🔧 处理文件重命名
@@ -455,7 +455,7 @@ export class MirrorServer {
     let syncId: string | null = null;
 
     try {
-      console.log('[Server] 📥 Saving file:', path, 'type:', contentType);
+      console.log('[Server] 📥 Saving file:', path, 'type:', contentType, 'docId:', docId || '(none)');
 
       // 获取项目配置
       const projectConfig = this.configStore.getProjectConfig(projectId);
@@ -493,8 +493,10 @@ export class MirrorServer {
           syncManager.updateMapping(path, docId);
           console.log(`[Server] 📝 Updated docId mapping from initial sync: ${path} -> ${docId}`);
         } else {
-          console.log(`[Server] ⚠️ No syncManager found for ${projectId}, mapping will be updated later`);
+          console.log(`[Server] ⚠️ No syncManager found for ${projectId}, cannot update mapping for ${path}`);
         }
+      } else {
+        console.log(`[Server] ⚠️ No docId provided for ${path}, skipping mapping update`);
       }
 
       // 🔧 Remove marker file AFTER saving (FileWatcher can now detect user edits)
@@ -762,6 +764,15 @@ export class MirrorServer {
    * @private
    */
   private handleDirectoryRenamed(projectId: string, oldPath: string, newPath: string, folderId: string): void {
+    // 🔧 NEW: Check if this rename was triggered by local changes
+    // If yes, ignore it to prevent conflicts (the local rename has already been processed)
+    const syncManager = this.syncManagers.get(projectId);
+    if (syncManager && syncManager.isLocalRenameInProgress(oldPath, newPath)) {
+      console.log(`[Server] 🔗 Ignoring Overleaf WebSocket echo for local rename: ${oldPath} -> ${newPath}`);
+      console.log(`[Server]    This rename was triggered by local changes, already processed`);
+      return;
+    }
+
     // NEW: SyncOrchestrator - Start tracking operation
     const operation = this.orchestrator.startOperation(
       'overleaf',
@@ -986,9 +997,10 @@ export class MirrorServer {
    * At this point, it's safe to enable file watching
    *
    * @param projectId - Project ID
+   * @param folderMappings - Optional folder mappings from browser extension
    * @private
    */
-  private handleInitialSyncComplete(projectId: string): void {
+  private handleInitialSyncComplete(projectId: string, folderMappings?: Record<string, { path: string }>): void {
     console.log(`[Server] ✅ Initial sync complete for project: ${projectId}`);
     console.log(`[Server] 🚀 Enabling file monitoring for project: ${projectId}`);
 
@@ -996,6 +1008,24 @@ export class MirrorServer {
     const projectConfig = this.configStore.getProjectConfig(projectId);
     const workingDir = projectConfig.localPath;
     console.log(`[Server] 📁 Working directory for project ${projectId}: ${workingDir}`);
+
+    // 🔧 NEW: Initialize folder mappings if provided
+    if (folderMappings) {
+      console.log(`[Server] 📁 Received ${Object.keys(folderMappings).length} folder mappings`);
+      const syncManager = this.syncManagers.get(projectId);
+      if (syncManager) {
+        const folderIdToPath = new Map<string, { path: string }>();
+        for (const [folderId, info] of Object.entries(folderMappings)) {
+          folderIdToPath.set(folderId, { path: info.path });
+        }
+        syncManager.initializeFolderMappings(folderIdToPath);
+        console.log(`[Server] ✅ Initialized folder mappings for OverleafSyncManager`);
+      } else {
+        console.warn(`[Server] ⚠️ No syncManager found for ${projectId}, cannot initialize folder mappings`);
+      }
+    } else {
+      console.log(`[Server] ⚠️ No folder mappings provided in initial_sync_complete message`);
+    }
 
     // Send working directory to frontend
     this.broadcastToExtensions({

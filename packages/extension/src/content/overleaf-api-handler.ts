@@ -1312,19 +1312,194 @@ export class OverleafAPIHandler {
   }
 
   /**
-   * Rename a folder - LOGGING ONLY VERSION
-   * TODO: Implement actual DOM manipulation after testing message flow
+   * Rename a folder by simulating user interaction with the file tree UI
+   *
+   * Steps:
+   * 1. Find the folder in the file tree using findFolderByName
+   * 2. Click the folder to select it (so it becomes .selected)
+   * 3. Click the menu button to open the context menu
+   * 4. Click the "Rename" menu item (first <a> tag in dropdown)
+   * 5. Find the rename input span in li.selected
+   * 6. Clear the input and type the new folder name
+   * 7. Press Enter to confirm
    */
   private async renameFolderViaDOM(folderId: string, oldPath: string, newFolderName: string): Promise<void> {
-    console.log(`[APIHandler] 📁✏️ [LOGGING ONLY] Would rename folder: ${oldPath} -> ${newFolderName}`);
+    console.log(`[APIHandler] 📁✏️ Renaming folder: ${oldPath} -> ${newFolderName}`);
     console.log(`[APIHandler]    Folder ID: ${folderId}`);
-    console.log(`[APIHandler] ⚠️  TODO: Implement actual folder rename via DOM`);
-    console.log(`[APIHandler] ℹ️  For now, just logging to test message flow`);
 
-    // Simulate some delay
+    // Extract old folder name from path
+    const oldFolderName = oldPath.split('/').pop() || oldPath;
+
+    // Step 1: Find the folder element using findFolderByName
+    console.log(`[APIHandler] 🔍 Looking for folder: ${oldFolderName}`);
+
+    let folderElement = await this.findFolderByName(oldFolderName);
+
+    if (!folderElement) {
+      throw new Error(`Could not find folder element for folder: ${oldFolderName}`);
+    }
+
+    console.log(`[APIHandler] ✅ Found folder element: ${oldFolderName}`);
+
+    // Step 2: Click the folder to select it (so it becomes .selected)
+    console.log(`[APIHandler] 🔍 Clicking folder to select it...`);
+
+    // Find the clickable element (try multiple methods)
+    let clickTarget: HTMLElement | null = null;
+
+    // Method 1: Try to find file-tree-entity-button
+    clickTarget = folderElement.querySelector('.file-tree-entity-button') as HTMLElement;
+
+    // Method 2: Try to find .entity-name
+    if (!clickTarget) {
+      clickTarget = folderElement.querySelector('.entity-name') as HTMLElement;
+    }
+
+    // Method 3: Try to find button
+    if (!clickTarget) {
+      clickTarget = folderElement.querySelector('button') as HTMLElement;
+    }
+
+    // Method 4: Use the li element itself
+    if (!clickTarget) {
+      clickTarget = folderElement as HTMLElement;
+    }
+
+    this.simulateClick(clickTarget);
+    await this.sleep(500); // Wait for selection to take effect
+
+    // Verify the folder is now selected
+    const isSelected = folderElement.classList.contains('selected');
+    console.log(`[APIHandler] 🔍 Folder selected: ${isSelected}`);
+
+    // Step 3: Find and click the menu button
+    const menuButton = folderElement.querySelector('.menu-button .entity-menu-toggle');
+    if (!menuButton) {
+      throw new Error('Could not find menu button for folder');
+    }
+
+    console.log(`[APIHandler] ✅ Found menu button, clicking...`);
+    this.simulateClick(menuButton as HTMLElement);
+    await this.sleep(500); // Wait for dropdown to appear
+
+    // Step 4: Find and click the "Rename" menu item (first <a> tag)
+    console.log(`[APIHandler] 🔍 Looking for Rename menu item...`);
+
+    // Find the first <a> tag in the dropdown menu
+    const renameLink = document.querySelector('#dropdown-file-tree-context-menu > li:nth-child(1) > a.dropdown-item');
+
+    if (!renameLink) {
+      throw new Error('Could not find Rename menu item (first <a> tag)');
+    }
+
+    console.log(`[APIHandler] ✅ Found Rename menu item, clicking...`);
+    this.simulateClick(renameLink as HTMLElement);
+
+    // Wait for the rename input to appear
+    console.log(`[APIHandler] ⏳ Waiting for rename input to appear...`);
+    await this.sleep(1500);
+
+    // Step 5: Find the rename input in li.selected
+    console.log(`[APIHandler] 🔍 Looking for rename input in li.selected...`);
+
+    // For folders: button.file-tree-entity-button > span.rename-input > input
+    // Try multiple selectors to find the rename input
+    let actualInput: HTMLInputElement | null = null;
+
+    // Method 1: Direct input in file-tree-entity-button (most specific)
+    actualInput = folderElement.querySelector('.file-tree-entity-button input') as HTMLInputElement;
+    if (actualInput) {
+      console.log(`[APIHandler] ✅ Found input in .file-tree-entity-button`);
+    }
+
+    // Method 2: Find span.rename-input, then get the input inside
+    if (!actualInput) {
+      const renameSpan = folderElement.querySelector('.file-tree-entity-button span.rename-input');
+      if (renameSpan) {
+        console.log(`[APIHandler] ✅ Found span.rename-input`);
+        actualInput = renameSpan.querySelector('input') as HTMLInputElement;
+      }
+    }
+
+    // Method 3: Try in entity-name
+    if (!actualInput) {
+      actualInput = folderElement.querySelector('.entity-name input') as HTMLInputElement;
+      if (actualInput) {
+        console.log(`[APIHandler] ✅ Found input in .entity-name`);
+      }
+    }
+
+    // Method 4: Try any input in folder element
+    if (!actualInput) {
+      const allInputs = folderElement.querySelectorAll('input');
+      if (allInputs.length > 0) {
+        actualInput = allInputs[0] as HTMLInputElement;
+        console.log(`[APIHandler] ✅ Using first input found in folder element`);
+      }
+    }
+
+    if (!actualInput) {
+      throw new Error('Could not find rename input for folder');
+    }
+
+    console.log(`[APIHandler] ✅ Found rename input element: ${actualInput.tagName}`);
+    console.log(`[APIHandler] 🔍 Debug: input value="${actualInput.value}"`);
+
+    // Step 6: Clear the input and type the new folder name
+    console.log(`[APIHandler] ✏️ Typing new folder name: ${newFolderName}`);
+
+    // Focus the input
+    actualInput.focus();
+
+    // Select all text (if there's content)
+    actualInput.select();
+
     await this.sleep(100);
 
-    console.log(`[APIHandler] ✅ [LOGGING ONLY] Folder rename logged: ${oldPath} -> ${newFolderName}`);
+    // Clear and type new name
+    actualInput.value = newFolderName;
+
+    // Trigger input event to ensure value is registered
+    const inputEvent = new InputEvent('input', {
+      bubbles: true,
+      cancelable: true
+    });
+    actualInput.dispatchEvent(inputEvent);
+
+    // Wait for input to be processed
+    await this.sleep(500);
+
+    // Step 7: Press Enter to confirm
+    console.log(`[APIHandler] ⏎ Pressing Enter to confirm...`);
+
+    // Simulate Enter key press
+    const enterEvent = new KeyboardEvent('keydown', {
+      key: 'Enter',
+      code: 'Enter',
+      keyCode: 13,
+      which: 13,
+      bubbles: true,
+      cancelable: true
+    });
+
+    actualInput.dispatchEvent(enterEvent);
+
+    // Also dispatch keyup for completeness
+    const enterEventUp = new KeyboardEvent('keyup', {
+      key: 'Enter',
+      code: 'Enter',
+      keyCode: 13,
+      which: 13,
+      bubbles: true,
+      cancelable: true
+    });
+    actualInput.dispatchEvent(enterEventUp);
+
+    // Wait for the rename to complete
+    console.log(`[APIHandler] ⏳ Waiting for rename to complete...`);
+    await this.sleep(1000);
+
+    console.log(`[APIHandler] ✅ Folder renamed successfully: ${oldPath} -> ${newFolderName}`);
   }
 
   /**

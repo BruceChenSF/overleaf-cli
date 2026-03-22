@@ -43,6 +43,8 @@ export class OverleafSyncManager {
   private wsClient: WebSocket | null = null;
   private orchestrator: any; // SyncOrchestrator instance (will be set from server)
   private messageQueue?: BackendMessageQueue; // Message queue for sequential processing
+  private recentRootRenames = new Map<string, number>(); // Track recent root directory renames (oldPath -> timestamp)
+  private pendingLocalRenames = new Set<string>(); // Track local rename operations in progress (oldPath -> newPath)
 
   /**
    * Normalize path to use forward slashes (Overleaf format)
@@ -172,6 +174,25 @@ export class OverleafSyncManager {
       console.log(`[OverleafSyncManager] 🔍 Normalized path: ${normalizedPath}`);
       if (normalizedOldPath) {
         console.log(`[OverleafSyncManager] 🔍 Normalized oldPath: ${normalizedOldPath}`);
+      }
+
+      // 🔧 NEW: Check if this is a child file rename after a root directory rename
+      // If yes, ignore it (Overleaf handles child renames automatically when parent is renamed)
+      if (event.type === 'rename' && normalizedOldPath) {
+        // Check if the old path starts with any recently renamed root directory
+        for (const [rootOldPath, timestamp] of this.recentRootRenames.entries()) {
+          const timeSinceRename = Date.now() - timestamp;
+          if (timeSinceRename <= 5000) { // Within 5 seconds
+            // Check if this file is under the renamed root directory
+            if (normalizedOldPath.startsWith(rootOldPath + '/') || normalizedOldPath === rootOldPath) {
+              console.log(`[OverleafSyncManager] 🔗 Ignoring child file rename after root rename:`);
+              console.log(`[OverleafSyncManager]    Root renamed: ${rootOldPath} (${timeSinceRename}ms ago)`);
+              console.log(`[OverleafSyncManager]    Child file: ${normalizedOldPath} -> ${normalizedPath}`);
+              console.log(`[OverleafSyncManager]    Overleaf handles child renames automatically`);
+              return;
+            }
+          }
+        }
       }
 
       // 🔧 FIX: If this is a delete event for a file that's being renamed, ignore it
@@ -338,11 +359,29 @@ export class OverleafSyncManager {
         folderId = normalizedOldPath ? this.pathToFolderId.get(normalizedOldPath) : undefined;
         console.log(`[OverleafSyncManager] 📝 Directory renamed: ${normalizedOldPath} -> ${normalizedPath}, folderId: ${folderId || '(none)'}`);
 
+        // 🔧 NEW: Record this local rename operation to prevent conflicts with Overleaf WebSocket echo
+        const renameKey = `${normalizedOldPath}->${normalizedPath}`;
+        this.pendingLocalRenames.add(renameKey);
+        console.log(`[OverleafSyncManager] 📝 Recorded local rename operation: ${renameKey}`);
+
         // 🔧 NEW: If this is a ROOT directory rename, batch update child mappings
         // This prevents sending individual RENAME requests for children
         if (event.isRootRename && normalizedOldPath) {
           console.log(`[OverleafSyncManager] 🔄 ROOT directory rename - batch updating child mappings`);
           this.updateChildDirectoryMappings(normalizedOldPath, normalizedPath);
+
+          // 🔧 NEW: Record this root rename for child file filtering
+          // Children renamed within 5 seconds should be ignored (Overleaf handles them automatically)
+          this.recentRootRenames.set(normalizedOldPath, Date.now());
+          console.log(`[OverleafSyncManager] 📝 Recorded root directory rename: ${normalizedOldPath} (will ignore child renames for 5s)`);
+
+          // Clean up old entries (older than 10 seconds)
+          const now = Date.now();
+          for (const [oldPath, timestamp] of this.recentRootRenames.entries()) {
+            if (now - timestamp > 10000) {
+              this.recentRootRenames.delete(oldPath);
+            }
+          }
         }
       } else if (this.pathToFolderId.has(normalizedPath)) {
         operation = 'update';
@@ -470,6 +509,11 @@ export class OverleafSyncManager {
           } else {
             console.warn(`[OverleafSyncManager] ⚠️ Folder rename succeeded but no folderId found for ${response.oldPath}`);
           }
+
+          // 🔧 NEW: Clear pending local rename record
+          const renameKey = `${response.oldPath}->${response.path}`;
+          this.pendingLocalRenames.delete(renameKey);
+          console.log(`[OverleafSyncManager] 🗑️ Cleared local rename record: ${renameKey}`);
         }
 
         // NEW: SyncOrchestrator - Complete operation for directories
@@ -615,13 +659,19 @@ export class OverleafSyncManager {
    */
   private updateChildDirectoryMappings(oldPath: string, newPath: string): void {
     console.log(`[OverleafSyncManager] 🔄 Batch updating child mappings: ${oldPath} -> ${newPath}`);
+    console.log(`[OverleafSyncManager] 🔍 Debug: oldPath="${oldPath}", newPath="${newPath}"`);
+    console.log(`[OverleafSyncManager] 🔍 Debug: pathToDocId has ${this.pathToDocId.size} entries`);
+    console.log(`[OverleafSyncManager] 🔍 Debug: pathToDocId keys:`, Array.from(this.pathToDocId.keys()));
 
     let updatedFolderCount = 0;
     let updatedFileCount = 0;
 
     // Update all folderId mappings that start with oldPath
     for (const [folderPath, folderId] of this.pathToFolderId.entries()) {
-      if (folderPath.startsWith(oldPath + '/') || folderPath === oldPath) {
+      const prefix = oldPath + '/';
+      const matches = folderPath.startsWith(prefix) || folderPath === oldPath;
+      console.log(`[OverleafSyncManager] 🔍 Debug: folderPath="${folderPath}", prefix="${prefix}", matches=${matches}`);
+      if (matches) {
         const newFolderPath = folderPath.replace(oldPath, newPath);
         this.pathToFolderId.delete(folderPath);
         this.pathToFolderId.set(newFolderPath, folderId);
@@ -632,15 +682,34 @@ export class OverleafSyncManager {
 
     // Update all file mappings under this directory
     for (const [filePath, docId] of this.pathToDocId.entries()) {
-      if (filePath.startsWith(oldPath + '/') || filePath === oldPath) {
+      const prefix = oldPath + '/';
+      const matches = filePath.startsWith(prefix) || filePath === oldPath;
+      if (matches) {
         const newFilePath = filePath.replace(oldPath, newPath);
         this.pathToDocId.delete(filePath);
         this.pathToDocId.set(newFilePath, docId);
         updatedFileCount++;
-        // Don't log each file to avoid spamming
+        console.log(`[OverleafSyncManager]   📄 ${filePath} -> ${newFilePath} (${docId})`);
+      } else {
+        console.log(`[OverleafSyncManager] 🔍 Debug: filePath="${filePath}" does NOT match prefix="${prefix}"`);
       }
     }
 
     console.log(`[OverleafSyncManager] ✅ Updated ${updatedFolderCount} folder mappings and ${updatedFileCount} file mappings`);
+  }
+
+  /**
+   * Check if a rename operation is currently in progress (triggered by local changes)
+   * This is used to prevent conflicts with Overleaf WebSocket echo events
+   *
+   * @param oldPath - Old path
+   * @param newPath - New path
+   * @returns true if this rename was triggered by local changes
+   */
+  isLocalRenameInProgress(oldPath: string, newPath: string): boolean {
+    const normalizedOldPath = this.normalizePath(oldPath);
+    const normalizedNewPath = this.normalizePath(newPath);
+    const renameKey = `${normalizedOldPath}->${normalizedNewPath}`;
+    return this.pendingLocalRenames.has(renameKey);
   }
 }

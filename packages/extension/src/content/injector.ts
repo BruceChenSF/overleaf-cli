@@ -535,14 +535,20 @@ async function requestInitialSync(): Promise<void> {
     // Update status to ready
     updateLoadingStatus('ready');
 
-    // 🔧 NEW: Send initial_sync_complete message to server
+    // 🔧 NEW: Send initial_sync_complete message to server with folder mappings
     console.log('[Mirror] 📤 Sending initial_sync_complete message to server...');
+
+    // 🔧 NEW: Get folder mappings from OverleafSyncManager
+    const folderMappings = overleafWsClient.getFolderMappings();
+    console.log('[Mirror] 📁 Sending folder mappings:', Object.keys(folderMappings).length, 'folders');
+
     mirrorClient!.send({
       type: 'initial_sync_complete' as const,
       project_id: projectId,
+      folder_mappings: folderMappings,
       timestamp: Date.now()
     });
-    console.log('[Mirror] ✅ Initial sync complete message sent');
+    console.log('[Mirror] ✅ Initial sync complete message sent with folder mappings');
 
     // 🔧 Register callback for file operation events (keep connection alive)
     overleafWsClient.onChange(async (change) => {
