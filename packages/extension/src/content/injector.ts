@@ -9,6 +9,136 @@ console.log('[Mirror] ✅ Content script loaded!');
 console.log('[Mirror] Current URL:', window.location.href);
 console.log('[Mirror] Ready state:', document.readyState);
 
+/**
+ * Inject animation and style CSS
+ */
+function injectStatusStyles(): void {
+  // Check if already injected
+  if (document.getElementById('mirror-status-styles')) return;
+
+  const style = document.createElement('style');
+  style.id = 'mirror-status-styles';
+  style.textContent = `
+    @keyframes mirror-spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+    .mirror-status-icon {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      vertical-align: middle;
+      margin-right: 4px;
+    }
+    .mirror-status-icon.spinning {
+      animation: mirror-spin 1s linear infinite;
+    }
+    .mirror-status-icon svg {
+      width: 100%;
+      height: 100%;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+/**
+ * Loading state types
+ */
+type LoadingState =
+  | 'connecting'
+  | 'folders'
+  | 'files'
+  | 'ready'
+  | 'error';
+
+interface LoadingStatus {
+  state: LoadingState;
+  text: string;
+}
+
+/**
+ * Get SVG icon path
+ */
+function getIconPath(state: LoadingState): string {
+  const paths: Record<LoadingState, string> = {
+    connecting: 'M12 6v3l4-4-4-4v3c-4.42 0-8 3.58-8 8 0 1.57.46 3.03 1.24 4.26L6.7 14.8c-.45-.83-.7-1.79-.7-2.8 0-3.31 2.69-6 6-6zm6.76 1.74L17.3 9.2c.44.84.7 1.79.7 2.8 0 3.31-2.69 6-6 6v-3l-4 4 4 4v-3c4.42 0 8-3.58 8-8 0-1.57-.46-3.03-1.24-4.26z',
+    folders: 'M12 6v3l4-4-4-4v3c-4.42 0-8 3.58-8 8 0 1.57.46 3.03 1.24 4.26L6.7 14.8c-.45-.83-.7-1.79-.7-2.8 0-3.31 2.69-6 6-6zm6.76 1.74L17.3 9.2c.44.84.7 1.79.7 2.8 0 3.31-2.69 6-6 6v-3l-4 4 4 4v-3c4.42 0 8-3.58 8-8 0-1.57-.46-3.03-1.24-4.26z',
+    files: 'M12 6v3l4-4-4-4v3c-4.42 0-8 3.58-8 8 0 1.57.46 3.03 1.24 4.26L6.7 14.8c-.45-.83-.7-1.79-.7-2.8 0-3.31 2.69-6 6-6zm6.76 1.74L17.3 9.2c.44.84.7 1.79.7 2.8 0 3.31-2.69 6-6 6v-3l-4 4 4 4v-3c4.42 0 8-3.58 8-8 0-1.57-.46-3.03-1.24-4.26z',
+    ready: 'M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z',
+    error: 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z'
+  };
+
+  return paths[state];
+}
+
+function getIconColor(state: LoadingState): string {
+  const colors: Record<LoadingState, string> = {
+    connecting: '#f59e0b',
+    folders: '#f59e0b',
+    files: '#f59e0b',
+    ready: '#098842',
+    error: '#d73a49'
+  };
+  return colors[state];
+}
+
+/**
+ * Update loading status in UI
+ */
+function updateLoadingStatus(state: LoadingState, customText?: string): void {
+  const claudeButton = document.getElementById('toolbar-menu-bar-item-claude');
+  if (!claudeButton) return;
+
+  const statusMap: Record<LoadingState, { text: string; spinning: boolean }> = {
+    connecting: { text: 'Connecting...', spinning: true },
+    folders: { text: 'Syncing folders...', spinning: true },
+    files: { text: 'Syncing files...', spinning: true },
+    ready: { text: 'Ready', spinning: false },
+    error: { text: 'Error', spinning: false }
+  };
+
+  const status = statusMap[state];
+  const displayText = customText || status.text;
+  const color = getIconColor(state);
+  const animationStyle = status.spinning ? 'animation: mirror-spin 1s linear infinite;' : '';
+
+  // Set button disabled state (only clickable when ready)
+  if (state === 'ready') {
+    claudeButton.disabled = false;
+    claudeButton.removeAttribute('aria-disabled');
+    // Remove inline background-color to allow hover effects
+    claudeButton.style.backgroundColor = '';
+  } else {
+    claudeButton.disabled = true;
+    claudeButton.setAttribute('aria-disabled', 'true');
+    // Keep transparent background for disabled state
+    claudeButton.style.backgroundColor = 'transparent';
+  }
+
+  // Build button HTML with status icon + text only
+  claudeButton.innerHTML = `
+    <svg height="1em" style="flex:none;line-height:1;vertical-align: middle;${animationStyle}" viewBox="0 0 24 24" width="1em" xmlns="http://www.w3.org/2000/svg">
+      <title>${displayText}</title>
+      <path d="${getIconPath(state)}" fill="${color}" fill-rule="nonzero"></path>
+    </svg>
+    <span style="vertical-align: middle;">${displayText}</span>
+  `;
+
+  // If ready, schedule transition to "Terminal" text after 1 second
+  if (state === 'ready') {
+    setTimeout(() => {
+      const button = document.getElementById('toolbar-menu-bar-item-claude');
+      if (button) {
+        button.innerHTML = '<span style="vertical-align: middle;">Terminal</span>';
+        // Remove background-color to allow hover effects
+        button.style.backgroundColor = '';
+      }
+    }, 1000);
+  }
+
+  console.log(`[Mirror] Status: ${state} - ${displayText}`);
+}
+
 let mirrorClient: MirrorClient | null = null;
 let editMonitor: EditMonitor | null = null;
 let overleafWsClient: OverleafWebSocketClient | null = null;
@@ -27,6 +157,59 @@ function extractProjectId(): string | null {
 function extractCSRFToken(): string | null {
   const metaTag = document.querySelector('meta[name="ol-csrfToken"]') as HTMLMetaElement;
   return metaTag?.content || null;
+}
+
+/**
+ * Check if Overleaf loading screen is still present
+ */
+function isLoadingScreenPresent(): boolean {
+  const loadingScreen = document.querySelector('.loading-screen');
+  return loadingScreen !== null && (loadingScreen as HTMLElement).offsetParent !== null;
+}
+
+/**
+ * Wait for loading screen to disappear before initializing
+ */
+function waitForLoadingScreen(callback: () => void): void {
+  if (!isLoadingScreenPresent()) {
+    // No loading screen, proceed immediately
+    console.log('[Mirror] ✓ No loading screen detected, proceeding with initialization');
+    callback();
+    return;
+  }
+
+  console.log('[Mirror] ⏳ Loading screen detected, waiting for it to disappear...');
+
+  // Use MutationObserver to watch for loading screen removal
+  const observer = new MutationObserver((mutations) => {
+    if (!isLoadingScreenPresent()) {
+      console.log('[Mirror] ✓ Loading screen disappeared, proceeding with initialization');
+      observer.disconnect();
+      callback();
+    }
+  });
+
+  // Start observing the ide-root container
+  const ideRoot = document.getElementById('ide-root');
+  if (ideRoot) {
+    observer.observe(ideRoot, {
+      childList: true,
+      subtree: true
+    });
+  } else {
+    // Fallback: if ide-root not found, wait a bit and try again
+    console.log('[Mirror] ⚠️ ide-root not found, retrying in 500ms...');
+    setTimeout(() => waitForLoadingScreen(callback), 500);
+  }
+
+  // Fallback timeout: if loading screen doesn't disappear after 30 seconds, proceed anyway
+  setTimeout(() => {
+    if (isLoadingScreenPresent()) {
+      console.warn('[Mirror] ⚠️ Loading screen timeout (30s), proceeding with initialization anyway');
+      observer.disconnect();
+      callback();
+    }
+  }, 30000);
 }
 
 const projectId = extractProjectId();
@@ -51,12 +234,14 @@ if (!projectId) {
     console.error('[Mirror] Error sending message to background:', error);
   }
 
-  // Wait for DOM to load before connecting WebSocket
+  // Wait for DOM to load and loading screen to disappear
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initializeMirror);
+    document.addEventListener('DOMContentLoaded', () => {
+      waitForLoadingScreen(initializeMirror);
+    });
   } else {
-    // DOM already loaded, initialize immediately
-    initializeMirror();
+    // DOM already loaded, check for loading screen
+    waitForLoadingScreen(initializeMirror);
   }
 }
 
@@ -73,26 +258,35 @@ async function initializeMirror(): Promise<void> {
   console.log('[Mirror] 🎯 About to call injectClaudeButton()...');
   injectClaudeButton();
 
+  // 🔧 创建初始状态显示
+  updateLoadingStatus('connecting');
+
   // 如果第一次注入失败，等待DOM完全加载后重试
   console.log('[Mirror] ⏰ Scheduling button injection retries...');
   setTimeout(() => {
     console.log('[Mirror] ⏰ Retry 1: injecting Claude button...');
     injectClaudeButton();
+    updateLoadingStatus('connecting');
   }, 1000);
 
   setTimeout(() => {
     console.log('[Mirror] ⏰ Retry 2: injecting Claude button...');
     injectClaudeButton();
+    updateLoadingStatus('connecting');
   }, 3000);
 
   setTimeout(() => {
     console.log('[Mirror] ⏰ Retry 3: injecting Claude button...');
     injectClaudeButton();
+    updateLoadingStatus('connecting');
   }, 5000);
 
   // 以下是 WebSocket 相关的初始化（可能失败）
   try {
     console.log('[Mirror] Initializing WebSocket connection...');
+
+    // Update status to connecting
+    updateLoadingStatus('connecting');
 
     mirrorClient = new MirrorClient();
     await mirrorClient.connect();
@@ -138,6 +332,7 @@ async function initializeMirror(): Promise<void> {
     console.log('[Mirror] ✅ Initialization complete (including Overleaf sync)');
   } catch (error) {
     console.error('[Mirror] ❌ Initialization failed:', error);
+    updateLoadingStatus('error');
   }
 }
 
@@ -201,6 +396,7 @@ async function requestInitialSync(): Promise<void> {
 
     if (!csrfToken) {
       console.error('[Mirror] ❌ No CSRF token found');
+      updateLoadingStatus('error');
       return;
     }
 
@@ -233,14 +429,20 @@ async function requestInitialSync(): Promise<void> {
     (window as any).__overleaf_docIdToPath__ = overleafWsClient.getDocIdToPathMap();
     console.log('[Mirror] ✅ Exposed docIdToPath mapping to global');
 
-    // 🔧 NEW: Sync all folders first (before files)
+    // 🔧 Sync all folders first (before files)
     console.log('[Mirror] 📁 Syncing folder structure from Overleaf...');
+    updateLoadingStatus('folders');
+
     const syncedFolders = await overleafWsClient.syncAllFolders();
     console.log('[Mirror] ✅ Synced', syncedFolders.length, 'folders from Overleaf');
+
+    // Update status with folder count
+    updateLoadingStatus('folders', `Syncing ${syncedFolders.length} folders...`);
 
     // Send folder creation events to mirror server
     console.log('[Mirror] 📤 Sending folder creation events to mirror server...');
 
+    let folderCount = 0;
     for (const folderPath of syncedFolders) {
       const message = {
         type: 'directory_created' as const,
@@ -251,19 +453,32 @@ async function requestInitialSync(): Promise<void> {
       };
 
       mirrorClient!.send(message);
+      folderCount++;
+
+      // Update status every 10 folders
+      if (folderCount % 10 === 0) {
+        updateLoadingStatus('folders', `Syncing folders (${folderCount}/${syncedFolders.length})...`);
+      }
+
       console.log('[Mirror] ✅ Sent folder creation:', folderPath);
     }
 
     console.log('[Mirror] ✅ All folders sent to mirror server');
 
     // Sync all files
-    const syncedFiles = await overleafWsClient.syncAllFiles();
+    console.log('[Mirror] 📄 Syncing files from Overleaf...');
+    updateLoadingStatus('files');
 
+    const syncedFiles = await overleafWsClient.syncAllFiles();
     console.log('[Mirror] ✅ Synced', syncedFiles.length, 'files from Overleaf');
+
+    // Update status with file count
+    updateLoadingStatus('files', `Syncing ${syncedFiles.length} files...`);
 
     // Send files to mirror server
     console.log('[Mirror] 📤 Sending files to mirror server...');
 
+    let fileCount = 0;
     for (const file of syncedFiles) {
       const message = {
         type: 'file_sync' as const,
@@ -278,10 +493,20 @@ async function requestInitialSync(): Promise<void> {
       };
 
       mirrorClient!.send(message);
+      fileCount++;
+
+      // Update status every 5 files
+      if (fileCount % 5 === 0) {
+        updateLoadingStatus('files', `Syncing files (${fileCount}/${syncedFiles.length})...`);
+      }
+
       console.log('[Mirror] ✅ Sent:', file.path, `(${file.type === 'file' ? (file.content as ArrayBuffer).byteLength : (file.content as string).length} bytes/chars)`);
     }
 
     console.log('[Mirror] ✅ Initial sync complete!');
+
+    // Update status to ready
+    updateLoadingStatus('ready');
 
     // 🔧 NEW: Send initial_sync_complete message to server
     console.log('[Mirror] 📤 Sending initial_sync_complete message to server...');
@@ -473,6 +698,9 @@ async function getCookies(): Promise<{ [key: string]: string }> {
  * Create Claude button with SVG icon
  */
 function createClaudeButton(): HTMLElement {
+  // Inject styles if not already injected
+  injectStatusStyles();
+
   const wrapper = document.createElement('div');
   wrapper.className = 'dropdown';
   wrapper.id = 'mirror-claude-btn';
@@ -482,12 +710,13 @@ function createClaudeButton(): HTMLElement {
   button.type = 'button';
   button.id = 'toolbar-menu-bar-item-claude';
   button.className = 'ide-redesign-toolbar-dropdown-toggle-subdued ide-redesign-toolbar-button-subdued menu-bar-toggle dropdown-toggle btn btn-secondary';
+  button.disabled = true; // Initially disabled
+  button.setAttribute('aria-disabled', 'true');
   button.setAttribute('aria-expanded', 'false');
-  button.innerHTML = `
-    <svg height="1em" style="flex:none;line-height:1;vertical-align: middle;" viewBox="0 0 24 24" width="1em" xmlns="http://www.w3.org/2000/svg">
-      <title>Claude</title>
-      <path d="M4.709 15.955l4.72-2.647.08-.23-.08-.128H9.2l-.79-.048-2.698-.073-2.339-.097-2.266-.122-.571-.121L0 11.784l.055-.352.48-.321.686.06 1.52.103 2.278.158 1.652.097 2.449.255h.389l.055-.157-.134-.098-.103-.097-2.358-1.596-2.552-1.688-1.336-.972-.724-.491-.364-.462-.158-1.008.656-.722.881.06.225.061.893.686 1.908 1.476 2.491 1.833.365.304.145-.103.019-.073-.164-.274-1.355-2.446-1.446-2.49-.644-1.032-.17-.619a2.97 2.97 0 01-.104-.729L6.283.134 6.696 0l.996.134.42.364.62 1.414 1.002 2.229 1.555 3.03.456.898.243.832.091.255h.158V9.01l.128-1.706.237-2.095.23-2.695.08-.76.376-.91.747-.492.584.28.48.685-.067.444-.286 1.851-.559 2.903-.364 1.942h.212l.243-.242.985-1.306 1.652-2.064.73-.82.85-.904.547-.431h1.033l.76 1.129-.34 1.166-1.064 1.347-.881 1.142-1.264 1.7-.79 1.36.073.11.188-.02 2.856-.606 1.543-.28 1.841-.315.833.388.091.395-.328.807-1.969.486-2.309.462-3.439.813-.042.03.049.061 1.549.146.662.036h1.622l3.02.225.79.522.474.638-.079.485-1.215.62-1.64-.389-3.829-.91-1.312-.329h-.182v.11l1.093 1.068 2.006 1.81 2.509 2.33.127.578-.322.455-.34-.049-2.205-1.657-.851-.747-1.926-1.62h-.128v.17l.444.649 2.345 3.521.122 1.08-.17.353-.608.213-.668-.122-1.374-1.925-1.415-2.167-1.143-1.943-.14.08-.674 7.254-.316.37-.729.28-.607-.461-.322-.747.322-1.476.389-1.924.315-1.53.286-1.9.17-.632-.012-.042-.14.018-1.434 1.967-2.18 2.945-1.726 1.845-.414.164-.717-.37.067-.662.401-.589 2.388-3.036 1.44-1.882.93-1.086-.006-.158h-.055L4.132 18.56l-1.13.146-.487-.456.061-.746.231-.243 1.908-1.312-.006.006z" fill="#D97757" fill-rule="nonzero"></path>
-    </svg>
+  button.style.cssText = `
+    background-color: transparent;
+    color: rgb(244, 245, 246);
+    opacity: 1;
   `;
 
   button.addEventListener('click', () => {
