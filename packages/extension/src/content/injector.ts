@@ -10,6 +10,12 @@ import { toggleDrawer, autoStartTerminal, cleanup as cleanupTerminal } from './t
 const WORKING_DIR_KEY = 'working_dir';
 const TERMINAL_MODAL_KEY = 'terminal_modal_shown';
 
+/**
+ * Server content cache
+ */
+let cachedServerContent: string | null = null;
+let isServerContentLoading = false;
+
 // 🔔 立即输出日志，确认脚本已加载
 console.log('[Mirror] ✅ Content script loaded!');
 console.log('[Mirror] Current URL:', window.location.href);
@@ -253,6 +259,12 @@ if (!projectId) {
 
 async function initializeMirror(): Promise<void> {
   console.log('[Mirror] 🚀 initializeMirror() called!');
+
+  // 🔧 预加载服务端广告内容（在后台异步加载，不阻塞主流程）
+  console.log('[Mirror] 📢 Pre-loading server content...');
+  fetchServerContent().catch(err => {
+    console.warn('[Mirror] Server content preload failed (non-critical):', err);
+  });
 
   // 🔧 自动启动终端（在后台初始化并连接，不显示抽屉）
   console.log('[Mirror] 🖥️ Auto-starting terminal...');
@@ -945,8 +957,33 @@ function createTerminalModal(workingDir: string): void {
   secondRow.appendChild(secondLabel);
   secondRow.appendChild(openBtn);
 
+  // Third row: server content area for ads/announcements
+  const thirdRow = document.createElement('div');
+  thirdRow.id = 'mirror-server-content-row';
+  thirdRow.style.cssText = `
+    margin-bottom: 8px;
+    min-height: 40px;
+  `;
+
+  const serverContent = document.createElement('div');
+  serverContent.id = 'mirror-server-content';
+  serverContent.style.cssText = `
+    padding: 12px;
+    background: #1a1a1a;
+    border: 1px solid #333;
+    border-radius: 4px;
+    color: #999;
+    font-size: 12px;
+    line-height: 1.4;
+    text-align: center;
+  `;
+  serverContent.textContent = '加载中...';
+
+  thirdRow.appendChild(serverContent);
+
   modalContent.appendChild(firstRow);
   modalContent.appendChild(secondRow);
+  modalContent.appendChild(thirdRow);
   modal.appendChild(modalContent);
   document.body.appendChild(modal);
 
@@ -993,9 +1030,74 @@ function createTerminalModal(workingDir: string): void {
         modal.remove();
       }
     });
+
+    // Use cached server content if available
+    const serverContentEl = document.getElementById('mirror-server-content');
+    if (serverContentEl) {
+      if (cachedServerContent) {
+        serverContentEl.innerHTML = cachedServerContent;
+        console.log('[Mirror] Using cached server content');
+      } else {
+        serverContentEl.style.display = 'none';
+        console.log('[Mirror] No cached content available');
+      }
+    }
   }, 0);
 
   console.log('[Mirror] Terminal modal shown with working dir:', workingDir);
+}
+
+/**
+ * Fetch server content from overleaf-cli.com/ad for ads/announcements
+ * Returns the content string and caches it globally
+ */
+async function fetchServerContent(): Promise<string | null> {
+  // Prevent duplicate requests
+  if (isServerContentLoading) {
+    console.log('[Mirror] Server content already loading, skipping duplicate request');
+    return null;
+  }
+
+  isServerContentLoading = true;
+
+  try {
+    const response = await fetch('https://overleaf-cli.com/ad', {
+      method: 'GET',
+      headers: {
+        'Accept': 'text/html, application/json, text/plain, */*',
+      },
+      cache: 'no-cache',
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const contentType = response.headers.get('content-type') || '';
+    let content = '';
+
+    if (contentType.includes('application/json')) {
+      const data = await response.json();
+      content = data.content || data.message || data.html || '';
+    } else {
+      // For HTML or plain text responses
+      content = await response.text();
+    }
+
+    if (content && content.trim()) {
+      cachedServerContent = content;
+      console.log('[Mirror] Server content cached successfully');
+      return content;
+    } else {
+      console.log('[Mirror] No server content available');
+      return null;
+    }
+  } catch (error) {
+    console.log('[Mirror] Failed to fetch server content:', error);
+    return null;
+  } finally {
+    isServerContentLoading = false;
+  }
 }
 
 /**
