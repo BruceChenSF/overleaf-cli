@@ -29,14 +29,14 @@ Browser plugin + backend that enables AI tools like **Claude Code**, **Cursor**,
 
 #### Backend (CLI Tool)
 
-\`\`\`bash
+```bash
 npm install -g overleaf-cli
-\`\`\`
+```
 
 Start the server:
-\`\`\`bash
+```bash
 overleaf-cli start
-\`\`\`
+```
 
 #### Frontend (Browser Extension)
 
@@ -62,11 +62,6 @@ overleaf-cli start
 - GitHub Copilot
 - And more...
 
-### 📊 Performance
-
-- **Speed**: 2.3s average task time (3.8x faster than Playwright)
-- **Accuracy**: 98.5% success rate
-
 ### 📝 License
 
 MIT License - see [LICENSE](LICENSE) for details
@@ -90,14 +85,14 @@ MIT License - see [LICENSE](LICENSE) for details
 
 #### 后端（CLI工具）
 
-\`\`\`bash
+```bash
 npm install -g overleaf-cli
-\`\`\`
+```
 
 启动服务器：
-\`\`\`bash
+```bash
 overleaf-cli start
-\`\`\`
+```
 
 #### 前端（浏览器扩展）
 
@@ -123,10 +118,6 @@ overleaf-cli start
 - GitHub Copilot
 - 更多...
 
-### 📊 性能
-
-- **速度**：平均任务时间2.3秒（比Playwright快3.8倍）
-- **准确率**：98.5%成功率
 
 ### 📝 许可证
 
