@@ -21,7 +21,13 @@ export type WSMessage =
   | DirectoryDeletedMessage
   | ExistingFoldersMessage
   | SyncToOverleafMessage
-  | SyncToOverleafResponse;
+  | SyncToOverleafResponse
+  | TerminalStartMessage
+  | TerminalDataMessage
+  | TerminalResizeMessage
+  | TerminalReadyMessage
+  | TerminalExitMessage
+  | TerminalErrorMessage;
 
 export interface FileCreatedMessage {
   type: 'file_created';
@@ -295,5 +301,52 @@ export interface SyncToOverleafResponse {
   success: boolean;
   error?: string;
   doc_id?: string;
+  timestamp: number;
+}
+
+// Terminal message types
+export interface TerminalStartMessage {
+  type: 'terminal_start';
+  project_id: string;
+  cols?: number;
+  rows?: number;
+  timestamp: number;
+}
+
+export interface TerminalDataMessage {
+  type: 'terminal_data';
+  session_id: string;
+  data: string;
+  timestamp: number;
+}
+
+export interface TerminalResizeMessage {
+  type: 'terminal_resize';
+  session_id: string;
+  cols: number;
+  rows: number;
+  timestamp: number;
+}
+
+export interface TerminalReadyMessage {
+  type: 'terminal_ready';
+  session_id: string;
+  pid: number;
+  cwd: string;
+  timestamp: number;
+}
+
+export interface TerminalExitMessage {
+  type: 'terminal_exit';
+  session_id: string;
+  exit_code: number;
+  signal?: string;
+  timestamp: number;
+}
+
+export interface TerminalErrorMessage {
+  type: 'terminal_error';
+  session_id: string;
+  error: string;
   timestamp: number;
 }

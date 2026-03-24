@@ -1,5 +1,6 @@
 /**
  * Terminal Logic for terminal.html
+ * Connects to mirror-server terminal endpoint
  */
 
 // Initialize terminal when DOM is ready
@@ -38,72 +39,142 @@ document.addEventListener('DOMContentLoaded', function() {
   terminal.open(document.getElementById('terminal'));
   fitAddon.fit();
 
-  // 连接 WebSocket
-  const ws = new WebSocket('ws://localhost:3000/terminal');
+  let currentSessionId = null;
+  let projectId = null;
 
-  ws.onopen = () => {
-    console.log('[Terminal] WebSocket connected');
-    terminal.writeln('\r\n\x1b[32m✓ Claude Terminal 已连接\x1b[0m\r\n');
+  // Get project_id from chrome.storage
+  if (typeof chrome !== 'undefined' && chrome.storage) {
+    chrome.storage.local.get(['working_dir'], (result) => {
+      const workingDir = result.working_dir;
+      if (workingDir) {
+        // Extract project_id from working_dir path
+        // Path format: ~/overleaf-mirror/{projectId}
+        const match = workingDir.match(/overleaf-mirror[\/\\]([^\/\\]+)$/);
+        if (match) {
+          projectId = match[1];
+          console.log('[Terminal] Extracted project_id:', projectId);
 
-    ws.send(JSON.stringify({
-      type: 'start',
-      cols: terminal.cols,
-      rows: terminal.rows
-    }));
-  };
-
-  ws.onmessage = (event) => {
-    try {
-      const message = JSON.parse(event.data);
-
-      switch (message.type) {
-        case 'ready':
-          console.log('[Terminal] PTY ready, PID:', message.pid);
-          break;
-
-        case 'data':
-          terminal.write(message.data);
-          break;
-
-        case 'exit':
-          console.log('[Terminal] PTY exited, code:', message.code);
-          terminal.writeln(`\r\n\r\n\x1b[33m进程已退出 (代码: ${message.code})\x1b[0m\r\n`);
-          break;
+          // Connect to terminal after getting project_id
+          connectToTerminal();
+        } else {
+          console.error('[Terminal] Failed to extract project_id from working_dir:', workingDir);
+          terminal.writeln('\r\n\x1b[31m✗ 无法获取项目 ID，请确保已连接到 Overleaf Mirror\x1b[0m\r\n');
+        }
+      } else {
+        console.warn('[Terminal] No working_dir found in storage');
+        terminal.writeln('\r\n\x1b[33m⚠️ 未找到工作目录，请先完成 Overleaf 同步\x1b[0m\r\n');
       }
-    } catch (error) {
-      console.error('[Terminal] Message error:', error);
+    });
+  } else {
+    console.error('[Terminal] chrome.storage not available');
+    terminal.writeln('\r\n\x1b[31m✗ Chrome Storage API 不可用\x1b[0m\r\n');
+  }
+
+  function connectToTerminal() {
+    if (!projectId) {
+      console.error('[Terminal] No project_id available');
+      return;
     }
-  };
 
-  ws.onerror = (error) => {
-    console.error('[Terminal] WebSocket error:', error);
-  };
+    // Connect to mirror-server WebSocket (port 3456)
+    const ws = new WebSocket('ws://localhost:3456');
 
-  ws.onclose = () => {
-    console.log('[Terminal] WebSocket closed');
-  };
+    ws.onopen = () => {
+      console.log('[Terminal] WebSocket connected to mirror-server');
+      terminal.writeln('\r\n\x1b[32m✓ Claude Terminal 已连接到镜像服务器\x1b[0m\r\n');
 
-  // 用户输入
-  terminal.onData((data) => {
-    if (ws.readyState === WebSocket.OPEN) {
+      // Send terminal_start message
       ws.send(JSON.stringify({
-        type: 'data',
-        data: data
-      }));
-    }
-  });
-
-  // 窗口大小改变
-  window.addEventListener('resize', () => {
-    fitAddon.fit();
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({
-        type: 'resize',
+        type: 'terminal_start',
+        project_id: projectId,
         cols: terminal.cols,
-        rows: terminal.rows
+        rows: terminal.rows,
+        timestamp: Date.now()
       }));
-    }
-  });
+    };
 
-  console.log('[Terminal] ✓ Initialized');
+    ws.onmessage = (event) => {
+      try {
+        const message = JSON.parse(event.data);
+
+        switch (message.type) {
+          case 'terminal_ready':
+            console.log('[Terminal] Terminal ready, PID:', message.pid, 'CWD:', message.cwd);
+            currentSessionId = message.session_id;
+            terminal.writeln(`\x1b[36m工作目录: ${message.cwd}\x1b[0m\r\n`);
+            break;
+
+          case 'terminal_data':
+            if (message.session_id === currentSessionId) {
+              terminal.write(message.data);
+            } else {
+              console.warn('[Terminal] Received data for different session:', message.session_id);
+            }
+            break;
+
+          case 'terminal_exit':
+            console.log('[Terminal] Terminal exited, code:', message.exit_code);
+            if (message.session_id === currentSessionId) {
+              terminal.writeln(`\r\n\r\n\x1b[33m进程已退出 (代码: ${message.exit_code})\x1b[0m\r\n`);
+              currentSessionId = null;
+            }
+            break;
+
+          case 'terminal_error':
+            console.error('[Terminal] Terminal error:', message.error);
+            if (message.session_id === currentSessionId) {
+              terminal.writeln(`\r\n\r\n\x1b[31m错误: ${message.error}\x1b[0m\r\n`);
+            }
+            break;
+
+          default:
+            // Ignore other message types (sync, edit_event, etc.)
+            break;
+        }
+      } catch (error) {
+        console.error('[Terminal] Message parse error:', error);
+      }
+    };
+
+    ws.onerror = (error) => {
+      console.error('[Terminal] WebSocket error:', error);
+      terminal.writeln('\r\n\x1b[31m✗ WebSocket 连接错误，请确保镜像服务器正在运行\x1b[0m\r\n');
+    };
+
+    ws.onclose = () => {
+      console.log('[Terminal] WebSocket closed');
+      if (currentSessionId) {
+        terminal.writeln('\r\n\x1b[33m连接已关闭\x1b[0m\r\n');
+        currentSessionId = null;
+      }
+    };
+
+    // User input - send to terminal
+    terminal.onData((data) => {
+      if (ws.readyState === WebSocket.OPEN && currentSessionId) {
+        ws.send(JSON.stringify({
+          type: 'terminal_data',
+          session_id: currentSessionId,
+          data: data,
+          timestamp: Date.now()
+        }));
+      }
+    });
+
+    // Window resize - send new dimensions
+    window.addEventListener('resize', () => {
+      fitAddon.fit();
+      if (ws.readyState === WebSocket.OPEN && currentSessionId) {
+        ws.send(JSON.stringify({
+          type: 'terminal_resize',
+          session_id: currentSessionId,
+          cols: terminal.cols,
+          rows: terminal.rows,
+          timestamp: Date.now()
+        }));
+      }
+    });
+
+    console.log('[Terminal] ✓ Terminal initialized');
+  }
 });

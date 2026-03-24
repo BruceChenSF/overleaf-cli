@@ -3,6 +3,7 @@ import type { WSMessage, MirrorRequestMessage, SyncCommandMessage } from './type
 
 export class ClientConnection {
   private messageId = 0;
+  private terminalSessionId?: string;
 
   constructor(private ws: WebSocket, private projectId: string) {}
 
@@ -58,5 +59,18 @@ export class ClientConnection {
 
   close(): void {
     this.ws.close();
+  }
+
+  // Terminal session tracking
+  setTerminalSession(sessionId: string): void {
+    this.terminalSessionId = sessionId;
+  }
+
+  getTerminalSession(): string | undefined {
+    return this.terminalSessionId;
+  }
+
+  clearTerminalSession(): void {
+    this.terminalSessionId = undefined;
   }
 }

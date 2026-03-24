@@ -52,7 +52,8 @@
       "Bash(npm --version)",
       "Bash(git restore:*)",
       "Bash(npm run compile:*)",
-      "Bash(npm run build:extension:*)"
+      "Bash(npm run build:extension:*)",
+      "Bash(git clean:*)"
     ]
   },
   "enabledPlugins": {

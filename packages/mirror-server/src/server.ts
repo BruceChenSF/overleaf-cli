@@ -11,6 +11,7 @@ import { ProjectConfigStore } from './config';
 import { OverleafAPIClient } from './api';
 import { TextFileSyncManager } from './sync';
 import { SyncOrchestrator } from './sync/sync-orchestrator';
+import { TerminalHandler } from './terminal';
 import type { WSMessage, SyncCommandMessage, ServerConfig } from './types';
 import type { EditEventMessage } from '@overleaf-cc/shared';
 import type { FileChangeEvent } from './filesystem/watcher';
@@ -37,6 +38,9 @@ export class MirrorServer {
 
   // NEW: SyncOrchestrator - 中心化同步编排器
   private orchestrator: SyncOrchestrator;
+
+  // NEW: TerminalHandler - 终端会话管理器
+  private terminalHandler: TerminalHandler;
 
   constructor(httpServer?: HttpServer) {
     // Create HTTP server for API endpoints
@@ -68,6 +72,10 @@ export class MirrorServer {
     // NEW: Initialize SyncOrchestrator
     this.orchestrator = new SyncOrchestrator({ enableDebugLogging: true });
     console.log('[Server] SyncOrchestrator initialized');
+
+    // NEW: Initialize TerminalHandler
+    this.terminalHandler = new TerminalHandler(this.configStore);
+    console.log('[Server] TerminalHandler initialized');
 
     // Start listening
     if (!httpServer) {
@@ -172,6 +180,10 @@ export class MirrorServer {
 
       ws.on('close', () => {
         console.log('[Server] Connection closed');
+
+        // 🔧 Cleanup terminal session for this connection
+        this.terminalHandler.cleanupConnection(connection);
+
         this.connections.delete(ws);
       });
 
@@ -346,6 +358,13 @@ export class MirrorServer {
         break;
       case 'sync_to_overleaf_response':
         this.handleSyncResponse(message);
+        break;
+      case 'terminal_start':
+      case 'terminal_data':
+      case 'terminal_resize':
+        // 🔧 Handle terminal messages
+        console.log('[Server] Routing to terminal handler:', message.type);
+        this.terminalHandler.handleTerminalMessage(connection, message);
         break;
       default:
         console.warn('Unknown message type:', message);
@@ -1228,6 +1247,9 @@ export class MirrorServer {
       watcher.stop();
     });
     this.fileWatchers.clear();
+
+    // 🔧 Destroy all terminal sessions
+    this.terminalHandler.destroyAll();
 
     // Close WebSocket server
     this.wss.close();
