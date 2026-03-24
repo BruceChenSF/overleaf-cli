@@ -1,0 +1,50 @@
+{
+  "manifest_version": 3,
+  "name": "Overleaf Mirror",
+  "version": "2.0.0",
+  "description": "Bidirectional file sync for Claude Code",
+  "permissions": [
+    "cookies",
+    "storage",
+    "webRequest"
+  ],
+  "host_permissions": [
+    "https://*.overleaf.com/*",
+    "https://*.cn.overleaf.com/*",
+    "ws://localhost:3456/*",
+    "http://localhost:3456/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://*.overleaf.com/project/*", "https://*.cn.overleaf.com/project/*"],
+      "js": ["dist/content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "background": {
+    "service_worker": "dist/background.js"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["dist/edit-monitor-bridge.js"],
+      "matches": ["https://*.overleaf.com/*", "https://*.cn.overleaf.com/*"]
+    },
+    {
+      "resources": ["public/libs/*", "public/terminal.html"],
+      "matches": ["https://*.overleaf.com/*", "https://*.cn.overleaf.com/*"]
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.svg",
+    "48": "icons/icon48.svg",
+    "128": "icons/icon128.svg"
+  },
+  "action": {
+    "default_icon": {
+      "16": "icons/icon16.svg",
+      "48": "icons/icon48.svg",
+      "128": "icons/icon128.svg"
+    }
+  }
+}

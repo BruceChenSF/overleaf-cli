@@ -1,0 +1,155 @@
+# Overleaf CLI v2.0.0 - Release Notes
+
+## Release Date: 2025-03-24
+
+## Packages
+
+### 1. npm Package (overleaf-cli)
+- File: `overleaf-cli-v2.0.0.tgz`
+- Size: 111.9 KB
+- SHA256: `1fddbff85ddf45faf6d127344fe92006d8f5c3ee99c949029fc31b1cfe475a07`
+
+**Installation:**
+```bash
+npm install -g overleaf-cli
+```
+
+**Usage:**
+```bash
+overleaf-cli start
+overleaf-cli start --port 4000
+```
+
+**Features:**
+- Real-time bidirectional sync between Overleaf and local filesystem
+- Integrated terminal for project operations
+- File creation, deletion, and renaming support
+- Binary and text file handling
+- WebSocket-based communication
+
+**Changes from v1.0.0:**
+- Package renamed from `@overleaf-cc/mirror-server` to `overleaf-cli`
+- CLI command renamed from `overleaf-mirror-server` to `overleaf-cli`
+- Removed workspace dependency on `@overleaf-cc/shared` (types now inlined)
+- Version aligned with extension at v2.0.0
+
+### 2. Chrome Extension
+- File: `overleaf-extension-v2.0.0.zip`
+- Size: 167 KB (170,971 bytes)
+- SHA256: `e0ca53f9c27a2398493e14629077461ffef21c1f45207826bfda823b7ba0630d`
+
+**Files Included:**
+- manifest.json (extension configuration)
+- dist/background.js (background script)
+- dist/content.js (content script injected into Overleaf pages)
+- dist/edit-monitor-bridge.js (communication bridge)
+- dist/terminal.js and dist/terminal.html (integrated terminal)
+- icons/ (16x16, 48x48, 128x128 SVG icons)
+- public/libs/ (xterm.js and dependencies)
+
+**Features:**
+- Bidirectional file synchronization with local backend
+- Integrated terminal for project operations
+- Edit monitoring and conflict prevention
+- File operation handling (create, delete, rename)
+- WebSocket communication with local server
+
+## Verification
+
+### Testing npm Package
+
+1. **Test global installation:**
+```bash
+npm install -g overleaf-cli-v2.0.0.tgz
+overleaf-cli start --help
+```
+
+2. **Test with npx:**
+```bash
+npx overleaf-cli-v2.0.0.tgz start --help
+```
+
+3. **Verify functionality:**
+- Start the server
+- Test WebSocket connections
+- Verify file synchronization
+
+### Testing Extension
+
+1. **Extract and verify:**
+```bash
+unzip overleaf-extension-v2.0.0.zip -d /tmp/test-ext
+```
+
+2. **Load in Chrome:**
+- Open `chrome://extensions/`
+- Enable Developer Mode
+- Click "Load unpacked"
+- Select the extracted directory
+
+3. **Verify functionality:**
+- Visit an Overleaf project
+- Check content script injection
+- Test terminal functionality
+- Verify file synchronization
+
+## Publishing
+
+### To npm
+
+```bash
+# 1. Ensure you're logged in
+npm login
+
+# 2. Publish from mirror-server directory
+cd packages/mirror-server
+npm publish
+
+# 3. Verify publication
+npm view overleaf-cli
+```
+
+### To Chrome Web Store
+
+1. Visit [Chrome Web Store Developer Dashboard](https://chrome.google.com/webstore/devconsole)
+2. Create new extension or update existing
+3. Upload `overleaf-extension-v2.0.0.zip`
+4. Fill in store information:
+   - **Name:** Overleaf Mirror
+   - **Description:** Bidirectional file sync and terminal for Overleaf
+   - **Permissions:** Explain why each permission is needed
+5. Submit for review
+
+## File Structure
+
+```
+release/
+├── overleaf-cli-v2.0.0.tgz         # npm package (111.9 KB)
+├── overleaf-extension-v2.0.0.zip   # Chrome extension (167 KB)
+├── checksums.txt                   # SHA256 checksums
+└── release-notes.txt               # This file
+```
+
+## Dependencies
+
+### Backend Dependencies
+- chokidar: ^3.5.3
+- commander: ^11.1.0
+- express: ^4.18.2
+- fs-extra: ^11.2.0
+- node-fetch: ^2.7.0
+- node-pty: ^1.1.0
+- ws: ^8.19.0
+- xstate: ^5.28.0
+
+### Runtime Requirements
+- Node.js >= 18.0.0
+- npm >= 8.0.0
+
+## License
+
+MIT License - See LICENSE file in package
+
+## Support
+
+For issues and questions, please visit the project repository.
