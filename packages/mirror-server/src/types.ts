@@ -2,7 +2,7 @@
  * Shared types for Overleaf Mirror system
  */
 
-import { EditEventMessage } from '@overleaf-cc/shared';
+import { EditEventMessage } from './shared-types';
 
 // WebSocket message types
 export type WSMessage =

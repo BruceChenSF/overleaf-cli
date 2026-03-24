@@ -1,0 +1,2 @@
+SHA256(overleaf-cli-v2.0.0.tgz)= 1fddbff85ddf45faf6d127344fe92006d8f5c3ee99c949029fc31b1cfe475a07
+SHA256(overleaf-extension-v2.0.0.zip)= e0ca53f9c27a2398493e14629077461ffef21c1f45207826bfda823b7ba0630d

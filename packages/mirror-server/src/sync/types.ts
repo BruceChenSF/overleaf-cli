@@ -1,4 +1,4 @@
-import { AnyOperation } from '@overleaf-cc/shared';
+import { AnyOperation } from '../shared-types';
 
 /**
  * Result of applying operations

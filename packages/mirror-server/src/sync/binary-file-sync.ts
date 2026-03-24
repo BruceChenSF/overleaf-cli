@@ -4,7 +4,7 @@ import { ProjectConfig } from '../config/types';
 import { OverleafAPIClient } from '../api/overleaf-client';
 import { ProjectFile } from '../api/types';
 import { FileSystemManager } from '../filesystem/manager';
-import { TEXT_FILE_EXTENSIONS } from '@overleaf-cc/shared';
+import { TEXT_FILE_EXTENSIONS } from '../shared-types';
 
 /**
  * Binary file sync manager with periodic polling

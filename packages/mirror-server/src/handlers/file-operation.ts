@@ -2,7 +2,7 @@ import path, { join, extname } from 'path';
 import { ProjectConfig } from '../config/types';
 import { OverleafAPIClient } from '../api/overleaf-client';
 import { FileSystemManager } from '../filesystem/manager';
-import { TEXT_FILE_EXTENSIONS } from '@overleaf-cc/shared';
+import { TEXT_FILE_EXTENSIONS } from '../shared-types';
 import fs from 'fs-extra';
 
 /**

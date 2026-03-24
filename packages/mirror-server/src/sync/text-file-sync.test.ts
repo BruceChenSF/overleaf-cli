@@ -4,7 +4,7 @@ import { tmpdir } from 'os';
 import { TextFileSyncManager } from './text-file-sync';
 import { ProjectConfigStore } from '../config/store';
 import { OverleafAPIClient } from '../api/overleaf-client';
-import { AnyOperation } from '@overleaf-cc/shared';
+import { AnyOperation } from '../shared-types';
 
 describe('TextFileSyncManager', () => {
   const testDir = join(tmpdir(), 'text-sync-test');

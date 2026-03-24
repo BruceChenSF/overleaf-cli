@@ -10,11 +10,14 @@
     "dev:server": "pnpm --filter @overleaf-cc/mirror-server dev",
     "dev:extension": "pnpm --filter @overleaf-cc/extension dev",
     "test": "pnpm -r test",
-    "clean": "pnpm -r exec -- rm -rf dist"
+    "clean": "pnpm -r exec -- rm -rf dist",
+    "release": "node scripts/prepare-release.js",
+    "release:npm": "cd packages/mirror-server && npm publish --registry https://registry.npmjs.org/"
   },
   "devDependencies": {
-    "typescript": "^5.3.0",
-    "prettier": "^3.1.0"
+    "archiver": "^6.0.2",
+    "prettier": "^3.1.0",
+    "typescript": "^5.3.0"
   },
   "engines": {
     "node": ">=18.0.0",

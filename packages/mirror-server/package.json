@@ -1,11 +1,16 @@
 {
-  "name": "@overleaf-cc/mirror-server",
-  "version": "1.0.0",
-  "description": "Local backend service for Overleaf file mirroring",
+  "name": "overleaf-cli",
+  "version": "2.0.0",
+  "description": "CLI tool for Overleaf file synchronization and terminal",
   "main": "dist/index.js",
   "bin": {
-    "overleaf-mirror-server": "dist/cli.js"
+    "overleaf-cli": "dist/cli.js"
   },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "prebuild": "rimraf dist",
     "build": "tsc",
@@ -14,8 +19,15 @@
     "start": "node dist/index.js",
     "test": "jest"
   },
+  "keywords": [
+    "overleaf",
+    "latex",
+    "sync",
+    "cli",
+    "terminal",
+    "file-sync"
+  ],
   "dependencies": {
-    "@overleaf-cc/shared": "file:../shared",
     "chokidar": "^3.5.3",
     "commander": "^11.1.0",
     "express": "^4.18.2",

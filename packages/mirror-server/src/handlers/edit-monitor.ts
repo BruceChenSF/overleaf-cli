@@ -1,4 +1,4 @@
-import { EditEventMessage, AnyOperation } from '@overleaf-cc/shared';
+import { EditEventMessage, AnyOperation } from '../shared-types';
 import { ProjectConfigStore } from '../config/store';
 import { OverleafAPIClient } from '../api/overleaf-client';
 import { TextFileSyncManager } from '../sync/text-file-sync';

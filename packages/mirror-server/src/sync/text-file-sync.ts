@@ -3,7 +3,7 @@ import path from 'path';
 import { FileSystemManager } from '../filesystem/manager';
 import { OverleafAPIClient } from '../api/overleaf-client';
 import { ProjectConfig } from '../config/types';
-import { EditEventData, AnyOperation } from '@overleaf-cc/shared';
+import { EditEventData, AnyOperation } from '../shared-types';
 import { OpResult, DocCacheEntry } from './types';
 
 export class TextFileSyncManager {

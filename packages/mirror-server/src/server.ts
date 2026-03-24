@@ -13,7 +13,7 @@ import { TextFileSyncManager } from './sync';
 import { SyncOrchestrator } from './sync/sync-orchestrator';
 import { TerminalHandler } from './terminal';
 import type { WSMessage, SyncCommandMessage, ServerConfig } from './types';
-import type { EditEventMessage } from '@overleaf-cc/shared';
+import type { EditEventMessage } from './shared-types';
 import type { FileChangeEvent } from './filesystem/watcher';
 
 const PORT = 3456;

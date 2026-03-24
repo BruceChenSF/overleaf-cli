@@ -5,9 +5,9 @@ import { MirrorServer } from './server';
 const program = new Command();
 
 program
-  .name('overleaf-mirror-server')
-  .description('Overleaf Mirror Server - Local file sync service')
-  .version('1.0.0');
+  .name('overleaf-cli')
+  .description('Overleaf CLI - Bidirectional file sync and terminal')
+  .version('2.0.0');
 
 program
   .command('start')
