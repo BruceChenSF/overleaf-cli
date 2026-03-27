@@ -476,7 +476,7 @@ function createDrawer(): HTMLElement {
         color: #fff;
         font-size: 14px;
         font-weight: 500;
-      ">Claude Terminal</span>
+      ">Terminal</span>
       <div style="display: flex; align-items: center; gap: 8px;">
         <button id="position-settings-btn" style="
           background: transparent;

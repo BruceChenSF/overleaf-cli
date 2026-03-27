@@ -81,7 +81,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     ws.onopen = () => {
       console.log('[Terminal] WebSocket connected to mirror-server');
-      terminal.writeln('\r\n\x1b[32m✓ Claude Terminal 已连接到镜像服务器\x1b[0m\r\n');
+      terminal.writeln('\r\n\x1b[32m✓ Terminal 已连接到镜像服务器\x1b[0m\r\n');
 
       // Send terminal_start message
       ws.send(JSON.stringify({
